@@ -1,0 +1,4 @@
+/*
+Sends the telemetry message to the launcher
+Handles the basic transmit cycle and communication status
+*/

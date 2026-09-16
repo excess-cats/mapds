@@ -1,0 +1,4 @@
+/*
+Main program for the launcher system.
+Starts all launcher modules and coordinates the overall control flow.
+*/

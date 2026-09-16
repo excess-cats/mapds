@@ -1,0 +1,4 @@
+/*
+Defines exactly what information goes into one telemetry message
+Keeps the message structure consistent for the launcher to read
+*/

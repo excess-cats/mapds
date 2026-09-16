@@ -1,0 +1,4 @@
+/*
+Handles operator inputs from the cockpit interface.
+Reads Arm and Deploy commands and sends the requests to the launcher controller.
+*/
