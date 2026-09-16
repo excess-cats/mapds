@@ -1,4 +1,0 @@
-/*
-Monitors the launcher battery and power status.
-Sends battery information to the rest of the launcher software and cockpit interface.
-*/

@@ -1,4 +1,0 @@
-/*
-Controls the physical release mechanism.
-Sends the release command and checks whether deployment completed successfully.
-*/
