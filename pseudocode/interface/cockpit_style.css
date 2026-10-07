@@ -1,0 +1,626 @@
+:root {
+  --bg: #2b3035;
+  --panel: #212529;
+  --border: #343a40;
+  --text: #dee2e6;
+  --muted: #adb5bd;
+
+  --primary: #0d6efd;
+  --success: #198754;
+  --warning: #ffc107;
+  --danger: #dc3545;
+  --secondary: #6c757d;
+  --info: #0dcaf0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #111;
+}
+
+body {
+  font-family: Arial, sans-serif;
+}
+
+button {
+  font: inherit;
+}
+
+#viewport {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg);
+}
+
+#cockpit {
+  width: 1920px;
+  height: 1080px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
+  background: var(--bg);
+  color: var(--text);
+}
+
+
+/* HEADER */
+
+.topbar {
+  height: 86px;
+  margin: 0 28px;
+  width: calc(100% - 56px);
+  padding: 0 22px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand-group {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.brand-icon {
+  font-size: 42px;
+  color: var(--primary);
+}
+
+.brand-title {
+  font-size: 31px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.clock-box,
+.mode-btn {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 17px;
+
+  border-radius: 8px;
+  border: 1px solid var(--border);
+
+  background: var(--panel);
+  color: var(--text);
+
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.mode-btn {
+  cursor: pointer;
+}
+
+.state-badge {
+  min-width: 145px;
+  height: 48px;
+  padding: 0 20px;
+
+  border-radius: 8px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.state-standby {
+  background: var(--secondary);
+  color: white;
+}
+
+.state-loading {
+  background: var(--warning);
+  color: #111;
+}
+
+.state-loaded {
+  background: var(--secondary);
+  color: white;
+}
+
+.state-arming,
+.state-armed {
+  background: var(--warning);
+  color: #111;
+}
+
+.state-deploying {
+  background: var(--danger);
+  color: white;
+}
+
+.state-deployed {
+  background: var(--success);
+  color: white;
+}
+
+
+/* MAIN GRID */
+
+.dashboard {
+  height: calc(1080px - 86px);
+  padding: 22px 28px 24px;
+
+  display: grid;
+
+  grid-template-rows:
+    150px
+    1fr
+    250px
+    112px;
+
+  gap: 18px;
+}
+
+
+/* TOP STATUS */
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+}
+
+.status-tile {
+  border-radius: 12px;
+  padding: 20px 28px;
+
+  display: flex;
+  align-items: center;
+  gap: 22px;
+
+  color: white;
+  overflow: hidden;
+}
+
+.tile-success {
+  background: var(--success);
+}
+
+.tile-primary {
+  background: var(--primary);
+}
+
+.tile-neutral {
+  background: var(--secondary);
+}
+
+.tile-danger {
+  background: var(--danger);
+}
+
+.tile-warning {
+  background: var(--warning);
+  color: #111;
+}
+
+.status-icon {
+  font-size: 52px;
+  opacity: 0.45;
+}
+
+.status-value {
+  font-size: 36px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.status-label {
+  margin-top: 10px;
+  font-size: 21px;
+  font-weight: 700;
+}
+
+
+/* PANELS */
+
+.middle-grid {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: 18px;
+  min-height: 0;
+}
+
+.lower-grid {
+  display: grid;
+  grid-template-columns: 1.55fr 0.85fr;
+  gap: 18px;
+  min-height: 0;
+}
+
+.panel {
+  min-height: 0;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.panel-header {
+  height: 58px;
+  padding: 0 20px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  border-bottom: 1px solid var(--border);
+
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.panel-header i {
+  margin-right: 10px;
+}
+
+.mini-badge {
+  padding: 7px 13px;
+  border-radius: 6px;
+
+  background: var(--secondary);
+  color: white;
+
+  font-size: 16px;
+  font-weight: 800;
+}
+
+
+/* DDS STATUS */
+
+.status-list {
+  padding: 5px 20px;
+}
+
+.status-row {
+  min-height: 76px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  border-bottom: 1px solid var(--border);
+}
+
+.status-row:last-child {
+  border-bottom: 0;
+}
+
+.status-name {
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.status-name i {
+  margin-right: 12px;
+  font-size: 13px;
+}
+
+.check-value {
+  min-width: 145px;
+  text-align: right;
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.check-good {
+  color: var(--success);
+}
+
+.dot-good {
+  color: var(--success);
+}
+
+.dot-off {
+  color: var(--secondary);
+}
+
+
+/* TELEMETRY */
+
+.telemetry-grid {
+  height: calc(100% - 58px);
+
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.telemetry-item {
+  padding: 22px 24px;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.telemetry-item:nth-child(2),
+.telemetry-item:nth-child(4) {
+  border-right: 0;
+}
+
+.telemetry-item:nth-child(3),
+.telemetry-item:nth-child(4) {
+  border-bottom: 0;
+}
+
+.telemetry-item span {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.telemetry-item strong {
+  margin-top: 9px;
+  font-size: 32px;
+  font-family: monospace;
+  font-weight: 800;
+}
+
+
+/* SYSTEM MESSAGES */
+
+.message-log {
+  height: calc(100% - 58px);
+  padding: 8px 18px;
+  overflow: hidden;
+
+  font-family: monospace;
+  font-size: 18px;
+}
+
+.log-entry {
+  min-height: 44px;
+
+  display: grid;
+  grid-template-columns: 100px 110px 1fr;
+  align-items: center;
+
+  gap: 12px;
+
+  border-bottom: 1px solid var(--border);
+}
+
+.log-time {
+  color: var(--muted);
+}
+
+.log-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  height: 27px;
+  padding: 0 9px;
+
+  border-radius: 5px;
+
+  font-size: 14px;
+  font-weight: 800;
+
+  color: white;
+}
+
+.log-badge.info {
+  background: var(--info);
+}
+
+.log-badge.warning {
+  background: var(--warning);
+  color: #111;
+}
+
+.log-badge.command {
+  background: var(--primary);
+}
+
+.log-badge.status {
+  background: var(--success);
+}
+
+
+/* WARNINGS */
+
+.warning-content {
+  height: calc(100% - 58px);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  gap: 24px;
+  padding: 20px;
+
+  text-align: left;
+}
+
+.warning-main-icon {
+  font-size: 62px;
+}
+
+.warning-main-icon.good {
+  color: var(--success);
+}
+
+.warning-main-icon.warn {
+  color: var(--warning);
+}
+
+.warning-main-icon.bad {
+  color: var(--danger);
+}
+
+.warning-title {
+  font-size: 27px;
+  font-weight: 800;
+}
+
+.warning-text {
+  margin-top: 7px;
+  font-size: 19px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+
+/* CONTROLS */
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+}
+
+.command-btn {
+  border: 0;
+  border-radius: 12px;
+
+  color: white;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  gap: 22px;
+
+  cursor: pointer;
+}
+
+.command-btn i {
+  font-size: 44px;
+}
+
+.command-btn div {
+  text-align: left;
+}
+
+.command-btn strong {
+  display: block;
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.command-btn span {
+  display: block;
+  margin-top: 4px;
+
+  font-size: 17px;
+  font-weight: 500;
+
+  opacity: 0.95;
+}
+
+.command-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.load-btn {
+  background: var(--primary);
+}
+
+.arm-btn {
+  background: var(--warning);
+  color: #111;
+}
+
+.deploy-btn {
+  background: var(--danger);
+}
+
+
+/* NVG TEST MODE */
+
+html[data-vision-mode="nvg"] {
+  --nvg-bg: #020202;
+  --nvg-panel: #070707;
+  --nvg-border: #2a2a2a;
+  --nvg-text: #9a9a9a;
+  --nvg-bright: #d0d0d0;
+}
+
+html[data-vision-mode="nvg"] #viewport,
+html[data-vision-mode="nvg"] #cockpit {
+  background: var(--nvg-bg);
+  color: var(--nvg-text);
+}
+
+html[data-vision-mode="nvg"] .topbar,
+html[data-vision-mode="nvg"] .panel,
+html[data-vision-mode="nvg"] .clock-box,
+html[data-vision-mode="nvg"] .mode-btn {
+  background: var(--nvg-panel);
+  color: var(--nvg-text);
+  border-color: var(--nvg-border);
+}
+
+html[data-vision-mode="nvg"] .status-tile,
+html[data-vision-mode="nvg"] .state-badge,
+html[data-vision-mode="nvg"] .mini-badge,
+html[data-vision-mode="nvg"] .command-btn {
+  background: #0c0c0c !important;
+  color: var(--nvg-bright) !important;
+  border: 1px solid var(--nvg-border);
+}
+
+html[data-vision-mode="nvg"] .brand-icon,
+html[data-vision-mode="nvg"] .dot-good,
+html[data-vision-mode="nvg"] .warning-main-icon.good {
+  color: var(--nvg-bright);
+}
+
+html[data-vision-mode="nvg"] .telemetry-item span,
+html[data-vision-mode="nvg"] .warning-text,
+html[data-vision-mode="nvg"] .log-time {
+  color: var(--nvg-text);
+}
+
+html[data-vision-mode="nvg"] .check-good {
+  color: var(--nvg-bright);
+}
+
+html[data-vision-mode="nvg"] .panel-header,
+html[data-vision-mode="nvg"] .status-row,
+html[data-vision-mode="nvg"] .telemetry-item,
+html[data-vision-mode="nvg"] .log-entry {
+  border-color: var(--nvg-border);
+}
+
+html[data-vision-mode="nvg"] .log-badge {
+  background: #111 !important;
+  border: 1px solid var(--nvg-border);
+  color: var(--nvg-bright);
+}
