@@ -26,3 +26,5 @@ Thumbs.db
 .claude/settings.local.json
 CLAUDE.local.md
 CLAUDE.md
+
+/firmware/tools/
