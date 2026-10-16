@@ -77,24 +77,30 @@
  *   LOAD_POS, LOCK_POS, RELEASE_POS: TBD on the bench.
  *   Jiggle: 3 small moves either side of RELEASE_POS (~ +/-100 counts, TBD), then back to RELEASE_POS.
  *
- * ---------------------------------------------------------------- SERIAL STAND-IN (115200)
- *   l = toggle Load      a = toggle Arm      d = toggle Deploy
- *   e = END/SLEEP        k = ACKNOWLEDGE FAILURE
- *   p = toggle a simulated limit switch (until the real one has a GPIO)
- *   Print every transition ("ARMED -> SOFTWARE_ERROR: no telemetry 10 s") and a
- *   status line once a second: state, lights, warnings, telemetry age, missed count.
+ * ---------------------------------------------------------------- SERIAL (115200)
+ *   Every transition prints "FROM -> TO" and its action. The serial test stand-in
+ *   (keys for the switches, the limit switch, WAKE/SLEEP) was removed on 2026-10-16.
+ *
+ * ---------------------------------------------------------------- OPEN ISSUES
+ *   - Command collisions: the DCM is deaf for ~140 ms per second while it transmits, so a
+ *     SLEEP or RESTART can be lost. Options: send copies ~200 ms apart; send right after
+ *     a received frame; or resend SLEEP while frames keep arriving in a "should be asleep" state.
  *
  * ---------------------------------------------------------------- PROTOCOL
  *   ../shared/protocol.h: radio settings, Header, TelemetryFrame, buildWake/Sleep/Restart().
  *
  * ---------------------------------------------------------------- HARDWARE
+ *   Batteries            3.7 V 1-cell LiPo on the Heltec's JST connector (read with the onboard divider below).
+ *                        12 V pack straight into the DRI0057 for the servo (read via the servo: st.ReadVoltage).
+ *
  *   Power (no PMU on the Heltec: everything below is plain GPIO, from the V3.1 and V3.2 schematics)
  *   - VDD_3V3            always on. Powers the ESP32 and the SX1262 (no rail to enable for the radio).
  *   - Vext (GPIO 36)     switched 3.3 V: OLED + the "Vext" header pin. LOW = on, HIGH = off (pull-up, P-FET).
  *                        Leave it off unless something is wired to it. Don't power the limit switch from it.
  *   - Battery sense      ADC on GPIO 1, through a 390k/100k divider: VBAT = pin voltage * 4.9.
- *                        The divider is switched by ADC_Ctrl (GPIO 37), to save the battery between reads:
- *                          V3.0/V3.1: LOW = divider on    V3.2: HIGH = divider on   (check the board's silkscreen)
+ *                        The divider is switched by ADC_Ctrl (GPIO 37). The DDS turns it on once in PowerOn()
+ *                        and leaves it on: ~8.5 uA, nothing next to the board's ~100 mA.
+ *                          V3.0/V3.1: LOW = divider on    V3.2: HIGH = divider on   V3.4 (ours): HIGH, bench-confirmed 2026-10-16
  *                        analogReadMilliVolts() returns calibrated mV. Read only after the divider is on.
  *
  *   SX1262 radio (SPI)   CS 8, SCK 9, MOSI 10, MISO 11, RST 12, BUSY 13, DIO1 14, TCXO 1.8 V, 14 dBm (bench)
@@ -122,6 +128,31 @@
 #include "../shared/protocol.h"
 
 
+// ---------------------------------------------------------------- pins
+
+constexpr int LED_PIN    = 35;
+constexpr int ADC_CTRL   = 37;
+constexpr int VBAT_PIN   = 1;    // battery divider output (ADC)
+
+constexpr int RADIO_CS   = 8;
+constexpr int RADIO_SCK  = 9;
+constexpr int RADIO_MOSI = 10;
+constexpr int RADIO_MISO = 11;
+constexpr int RADIO_RST  = 12;
+constexpr int RADIO_BUSY = 13;
+constexpr int RADIO_DIO1 = 14;
+
+constexpr int LIMIT_PIN  = -1;   // TBD: not wired yet
+constexpr int SERVO_TX   = -1;   // TBD: Heltec TX -> DRI0057 RX
+constexpr int SERVO_RX   = -1;   // TBD: Heltec RX <- DRI0057 TX
+
+// ---------------------------------------------------------------- settings
+
+constexpr int      kAdcCtrlOn   = HIGH;   // V3.4: HIGH confirmed on the bench; V3.0/V3.1 would be LOW
+constexpr int8_t   kTxPowerDbm  = 14;     // bench value; flight value TBD
+constexpr float    kTcxoVolts   = 1.8f;
+constexpr uint32_t kServoBaud   = 1000000;
+constexpr uint8_t  kServoId     = 1;      // factory default
 
 enum State  {
     LOAD,
@@ -137,13 +168,46 @@ enum State  {
 
 State state = STANDBY;
 uint32_t TimeStateEntered;
+SX1262 radio = new Module(RADIO_CS, RADIO_DIO1, RADIO_RST, RADIO_BUSY);
+bool radioUp = false;        // RadioBegin() succeeded; if false, never arm (no telemetry possible)
+uint16_t cmdSeq = 0;         // command counter (header.seq on WAKE/SLEEP/RESTART)
+
+
+
+
+// BEGIN: GLOBALS USED IN INTERFACE 
+bool     dcmPmuOk       = false;
+bool     dcmGnssOk      = false;   // GPS has a fix
+bool     dcmImuOk       = false;
+bool     dcmMagOk       = false;
+bool     dcmBmeOk       = false;
+double   dcmLatDeg      = 0;
+double   dcmLonDeg      = 0;
+float    dcmGpsAltM     = 0;       // m above sea level
+float    dcmHdop        = 0;       // lower is better (~1 good, >5 poor)
+float    dcmPressurePa  = 0;
+int8_t   dcmBattPct     = -1;      // 0-100, or -1 with no battery
+float    dcmTempC       = 0;
+float    dcmHumidityPct = 0;
+float    dcmAccelMps2[3] = {};     // x, y, z
+float    dcmGyroDps[3]   = {};
+float    dcmMagGauss[3]  = {};
+uint32_t tLastPacket = 0;    // millis() when the last valid frame arrived
+float    lastRssi    = 0;    // dBm, of the last valid frame
+float    lastSnr     = 0;    // dB
 
 bool LoadCommand = false;
 bool ArmCommand = false;
 bool DeployCommand = false;
 bool EndCommand = false;    
 bool AckCommand = false;    
-bool LimitClosed = true;     // TESTING: simulated limit switch until it has a GPIO (true = drone present)
+
+// END: GLOBALS USED IN INTERFACE
+
+
+
+
+bool LimitClosed = true;     // true = drone present. Not read from LIMIT_PIN yet (GPIO TBD)
 
 /** Name of a state, for serial prints. */
 const char* StateName(State s){
@@ -174,7 +238,7 @@ bool StateChange(State to){
         case STANDBY:
             if(to == LOAD)       { UpdateState(to); Serial.println("  [servo -> LOAD_POS]"); return true; }
             if(to == NOT_LOADED) { UpdateState(to); return true; }
-            if(to == ARMED)      { UpdateState(to); Serial.println("  [send WAKE, reset health]"); return true; }
+            if(to == ARMED)      { UpdateState(to); Serial.println("  [send WAKE, reset health]"); Transmit(mapds::buildWake(cmdSeq++)); return true; }
             break;
         case LOAD:
             if(to == STANDBY)    { UpdateState(to); Serial.println("  [servo -> LOCK_POS]"); return true; }
@@ -184,15 +248,15 @@ bool StateChange(State to){
             if(to == LOAD)       { UpdateState(to); Serial.println("  [servo -> LOAD_POS]"); return true; }
             break;
         case ARMED:
-            if(to == STANDBY)        { UpdateState(to); Serial.println("  [send SLEEP]"); return true; }
-            if(to == NOT_LOADED)     { UpdateState(to); Serial.println("  [send SLEEP]"); return true; }
-            if(to == SOFTWARE_ERROR) { UpdateState(to); Serial.println("  [send RESTART]"); return true; }
+            if(to == STANDBY)        { UpdateState(to); Serial.println("  [send SLEEP]"); Transmit(mapds::buildSleep(cmdSeq++)); return true; }
+            if(to == NOT_LOADED)     { UpdateState(to); Serial.println("  [send SLEEP]"); Transmit(mapds::buildSleep(cmdSeq++)); return true; }
+            if(to == SOFTWARE_ERROR) { UpdateState(to); Serial.println("  [send RESTART]"); Transmit(mapds::buildRestart(cmdSeq++)); return true; }
             if(to == DEPLOYING)      { UpdateState(to); Serial.println("  [servo -> RELEASE_POS]"); return true; }
             break;
         case SOFTWARE_ERROR:
-            if(to == ARMED)      { UpdateState(to); Serial.println("  [send WAKE, reset health]"); return true; }
-            if(to == STANDBY)    { UpdateState(to); Serial.println("  [send SLEEP]"); return true; }
-            if(to == NOT_LOADED) { UpdateState(to); Serial.println("  [send SLEEP]"); return true; }
+            if(to == ARMED)      { UpdateState(to); Serial.println("  [send WAKE, reset health]"); Transmit(mapds::buildWake(cmdSeq++)); return true; }
+            if(to == STANDBY)    { UpdateState(to); Serial.println("  [send SLEEP]"); Transmit(mapds::buildSleep(cmdSeq++)); return true; }
+            if(to == NOT_LOADED) { UpdateState(to); Serial.println("  [send SLEEP]"); Transmit(mapds::buildSleep(cmdSeq++)); return true; }
             break;
         case DEPLOYING:
             if(to == DEPLOYED)     { UpdateState(to); return true; }
@@ -203,19 +267,17 @@ bool StateChange(State to){
             if(to == DEPLOY_FAILURE) { UpdateState(to); return true; }
             break;
         case DEPLOYED:
-            if(to == STANDBY)    { UpdateState(to); Serial.println("  [send SLEEP, switches off]"); return true; }
+            if(to == STANDBY)    { UpdateState(to); Serial.println("  [send SLEEP, switches off]"); Transmit(mapds::buildSleep(cmdSeq++)); return true; }
             break;
         case DEPLOY_FAILURE:
-            if(to == STANDBY)    { UpdateState(to); Serial.println("  [send SLEEP, switches off]"); return true; }
+            if(to == STANDBY)    { UpdateState(to); Serial.println("  [send SLEEP, switches off]"); Transmit(mapds::buildSleep(cmdSeq++)); return true; }
             break;
     }
     Serial.printf("No arrow %s -> %s, ignored\n", StateName(from), StateName(to));
     return false;
 }
 
-// ---------------------------------------------------------------- state functions
-// One per state, called every loop(). Each only decides when to leave, via StateChange().
-
+// STATES
 void Load(){
     // exits: Load off -> STANDBY
 }
@@ -253,33 +315,100 @@ void DeployFailure(){
     // exits: ACKNOWLEDGE FAILURE -> STANDBY
 }
 
-// ---------------------------------------------------------------- TESTING ONLY
-// Serial stand-in for the web UI and the limit switch. Remove once those exist.
-//   l / a / d  toggle Load / Arm / Deploy
-//   e          END/SLEEP            k   ACKNOWLEDGE FAILURE
-//   p          toggle the simulated limit switch
+// END STATES
 
-void ReadSerialTest(){
-    while(Serial.available()){
-        char c = Serial.read();
-        switch(c){
-            case 'l': LoadCommand   = !LoadCommand;   Serial.printf("TEST: Load %s\n",   LoadCommand   ? "on" : "off"); break;
-            case 'a': ArmCommand    = !ArmCommand;    Serial.printf("TEST: Arm %s\n",    ArmCommand    ? "on" : "off"); break;
-            case 'd': DeployCommand = !DeployCommand; Serial.printf("TEST: Deploy %s\n", DeployCommand ? "on" : "off"); break;
-            case 'e': EndCommand = true;              Serial.println("TEST: END/SLEEP"); break;
-            case 'k': AckCommand = true;              Serial.println("TEST: ACKNOWLEDGE FAILURE"); break;
-            case 'p': LimitClosed = !LimitClosed;     Serial.printf("TEST: limit %s\n",  LimitClosed   ? "CLOSED" : "OPEN"); break;
-            default: break;   // ignore newlines and anything else
-        }
-    }
+void PowerOn(){
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, HIGH);                  // power light
+
+    pinMode(ADC_CTRL, OUTPUT);
+    digitalWrite(ADC_CTRL, kAdcCtrlOn);           // battery divider on, and left on
+    analogSetPinAttenuation(VBAT_PIN, ADC_11db);  // 0 to ~3.1 V; a full LiPo reads ~857 mV
 }
 
+uint32_t ReadBatteryMv(){
+    return analogReadMilliVolts(VBAT_PIN) * 49 / 10;   // undo the 390k/100k divider (x4.9)
+}
+
+bool RadioBegin(){
+    SPI.begin(RADIO_SCK, RADIO_MISO, RADIO_MOSI, RADIO_CS);
+    int16_t status = radio.begin(mapds::kFreqMHz, mapds::kBandwidthKHz, mapds::kSpreadingFactor, mapds::kCodingRate,
+                               mapds::kSyncWord, kTxPowerDbm, mapds::kPreamble, kTcxoVolts);
+    if (status != RADIOLIB_ERR_NONE) {
+        Serial.printf("Radio init failed (%d)\n", status);  // look the code up in RadioLib's status codes
+        return false;
+    }
+    radio.startReceive();   // DDS listens by default; SendCommand() switches to TX briefly
+    return true;
+}
+
+/** Sends a bare-Header command (WAKE/SLEEP/RESTART), then goes back to listening. Returns false if it didn't go out. */
+bool Transmit(mapds::Header message){
+    if (!radioUp) { return false; }
+    int16_t radio_status = radio.transmit(reinterpret_cast<uint8_t*>(&message), sizeof(message));
+    radio.startReceive();   // transmit() leaves the radio idle (and raises DIO1); listen again for telemetry
+    if (radio_status != RADIOLIB_ERR_NONE) {
+        Serial.printf("TX failed (%d)\n", radio_status);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Checks the radio for a TELEMETRY frame from our DCM. If one arrived, stores it in
+ * the dcm* globals, tLastPacket, lastRssi and lastSnr, and returns its seq (0-65535).
+ * Returns -1 for nothing, junk, or someone else's packet.
+ * Only the first call after a packet arrives sees it: reading clears it.
+ */
+int32_t ReadPacket(){
+    if (!radioUp) { return -1; }
+    if (digitalRead(RADIO_DIO1) == LOW) { return -1; }   // DIO1 high = a packet is waiting
+
+    size_t len = radio.getPacketLength();                // before readData(), which clears the packet
+    uint8_t buf[sizeof(mapds::TelemetryFrame)];
+    int16_t st = radio.readData(buf, sizeof(buf));       // always read: caps at sizeof(buf), clears DIO1
+    float rssi = radio.getRSSI();                        // both describe the packet just read
+    float snr  = radio.getSNR();
+    radio.startReceive();
+    if (st != RADIOLIB_ERR_NONE) { return -1; }          // e.g. CRC error: corrupted in the air
+    if (len != sizeof(mapds::TelemetryFrame)) { return -1; }
+
+    mapds::TelemetryFrame f;
+    memcpy(&f, buf, sizeof(f));
+    if (f.header.msg != mapds::kMsgTelemetry) { return -1; }
+    if (f.header.pairId != mapds::kPairId) { return -1; }   // not our DCM
+
+    dcmPmuOk       = f.pmuOk;
+    dcmGnssOk      = f.gnssOk;
+    dcmImuOk       = f.imuOk;
+    dcmMagOk       = f.magOk;
+    dcmBmeOk       = f.bmeOk;
+    dcmLatDeg      = f.latDeg;
+    dcmLonDeg      = f.lonDeg;
+    dcmGpsAltM     = f.gpsAltM;
+    dcmHdop        = f.hdop;
+    dcmPressurePa  = f.pressurePa;
+    dcmBattPct     = f.battPct;
+    dcmTempC       = f.tempC;
+    dcmHumidityPct = f.humidityPct;
+    for (int i = 0; i < 3; i++) {
+        dcmAccelMps2[i] = f.accelMps2[i];
+        dcmGyroDps[i]   = f.gyroDps[i];
+        dcmMagGauss[i]  = f.magGauss[i];
+    }
+    tLastPacket = millis();
+    lastRssi    = rssi;
+    lastSnr     = snr;
+    return f.header.seq;
+}
 void setup() {
+    PowerOn();
     Serial.begin(115200);
+    radioUp = RadioBegin();
 }
 
 void loop() {
-    ReadSerialTest();   // TESTING ONLY
+    ReadPacket();   // keeps the dcm* globals fresh in every state
 
     switch(state){
         case LOAD:           Load();          break;
