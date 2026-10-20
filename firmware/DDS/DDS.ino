@@ -10,10 +10,11 @@
  * and read the state and lights. Until then, the serial monitor stands in.
  *
  * ---------------------------------------------------------------- STATES
- *   LOAD, STANDBY, NOT_LOADED, ARMED, SOFTWARE_ERROR,
+ *   LOAD, STANDBY, ARMED, SOFTWARE_ERROR,
  *   DEPLOYING, DEPLOYED, DEPLOY_ERROR, DEPLOY_FAILURE
  *
- *   Boot in STANDBY. If the limit switch is OPEN, the first loop() moves to NOT_LOADED.
+ *   Boot in STANDBY. FSM v3's NOT_LOADED is cut: STANDBY with the limit switch OPEN
+ *   covers it (no arming without a drone).
  *
  * ---------------------------------------------------------------- INPUTS
  *   Switches (levels: stay on until turned off)  Load, Arm, Deploy
@@ -24,20 +25,17 @@
  *   END and ACK turn all three switches off. Otherwise a still-on Arm and
  *   Deploy would re-arm and re-fire straight out of Standby.
  *
- * ---------------------------------------------------------------- FSM (Mealy: actions happen on the arrow)
- *   STANDBY ------(Load on)---------> LOAD             [servo -> LOAD_POS]
- *   LOAD ---------(Load off)--------> STANDBY          [servo -> LOCK_POS]
- *   STANDBY ------(limit OPEN)------> NOT_LOADED
- *   NOT_LOADED ---(limit CLOSED)----> STANDBY
- *   NOT_LOADED ---(Load on)---------> LOAD             [servo -> LOAD_POS]
- *   STANDBY ------(Arm on)----------> ARMED            [send WAKE, reset health, start 15 s timer]
+ * ---------------------------------------------------------------- FSM
+ *   STANDBY ------(Load on)---------> LOAD
+ *   LOAD ---------(Load off)--------> STANDBY
+ *   STANDBY ------(Arm on, limit CLOSED)> ARMED        [send WAKE, reset health, start 15 s timer]
  *   ARMED --------(Arm off)---------> STANDBY          [send SLEEP]
- *   ARMED --------(limit OPEN)------> NOT_LOADED       [send SLEEP]
+ *   ARMED --------(limit OPEN)------> STANDBY          [send SLEEP]
  *   ARMED --------(software fault)--> SOFTWARE_ERROR   [send RESTART, start 1 min timer]
- *   ARMED --------(Deploy on, 15 s up)> DEPLOYING      [servo -> RELEASE_POS, start 10 s timer]
+ *   ARMED --------(Deploy on, 15 s up)> DEPLOYING      [start 10 s timer]
  *   SOFTWARE_ERROR (1 min up)-------> ARMED            [send WAKE, reset health, start 15 s timer]
  *   SOFTWARE_ERROR (Arm off)--------> STANDBY          [send SLEEP]
- *   SOFTWARE_ERROR (limit OPEN)-----> NOT_LOADED       [send SLEEP]
+ *   SOFTWARE_ERROR (limit OPEN)-----> STANDBY          [send SLEEP]
  *   DEPLOYING ----(limit OPEN)------> DEPLOYED
  *   DEPLOYING ----(10 s, still CLOSED)> DEPLOY_ERROR   [jiggle the servo 3 times]
  *   DEPLOY_ERROR -(limit OPEN)------> DEPLOYED
@@ -46,7 +44,7 @@
  *   DEPLOY_FAILURE (ACK)------------> STANDBY          [send SLEEP, switches off]
  *
  *   Ignore any input that has no arrow out of the current state (e.g. Deploy in STANDBY).
- *   DEPLOYED -> STANDBY goes straight on to NOT_LOADED, because the limit switch is OPEN. That's expected.
+ *   DEPLOYED -> STANDBY lands with the limit switch OPEN, so Arm is refused until a drone is loaded.
  *   Every timer is "time since the transition that started it": save millis() once, on the arrow.
  *
  * ---------------------------------------------------------------- INDICATORS
@@ -104,8 +102,8 @@
  *                        analogReadMilliVolts() returns calibrated mV. Read only after the divider is on.
  *
  *   SX1262 radio (SPI)   CS 8, SCK 9, MOSI 10, MISO 11, RST 12, BUSY 13, DIO1 14, TCXO 1.8 V, 14 dBm (bench)
- *   Limit switch         GPIO TBD. Wiring TBD: to GND with INPUT_PULLUP means LOW = CLOSED. Debounce ~20 ms.
- *   Servo bus (Serial1)  TX TBD, RX TBD, 1000000 baud, servo ID 1
+ *   Limit switch         GPIO 40, to GND with INPUT_PULLUP: LOW = CLOSED. Debounced 20 ms (ReadLimitSwitch).
+ *   Servo bus (Serial1)  TX 38, RX 39, 1000000 baud, servo ID 1
  *                        via DFRobot DRI0057 driver board: Heltec TX -> board RX, Heltec RX -> board TX,
  *                        common GND, 12 V into the board's DC jack (must match the servo's 12 V).
  *                        Board's two shorting caps: set them for UART, not USB (check the silkscreen).
@@ -142,22 +140,35 @@ constexpr int RADIO_RST  = 12;
 constexpr int RADIO_BUSY = 13;
 constexpr int RADIO_DIO1 = 14;
 
-constexpr int LIMIT_PIN  = -1;   // TBD: not wired yet
-constexpr int SERVO_TX   = -1;   // TBD: Heltec TX -> DRI0057 RX
-constexpr int SERVO_RX   = -1;   // TBD: Heltec RX <- DRI0057 TX
+constexpr int LIMIT_PIN  = 40;   // drone presence limit switch
+constexpr int SERVO_TX   = 38;   // Heltec TX -> DRI0057 RX
+constexpr int SERVO_RX   = 39;   // Heltec RX <- DRI0057 TX
 
-// ---------------------------------------------------------------- settings
+// SERVO SETTINGS
 
 constexpr int      kAdcCtrlOn   = HIGH;   // V3.4: HIGH confirmed on the bench; V3.0/V3.1 would be LOW
 constexpr int8_t   kTxPowerDbm  = 14;     // bench value; flight value TBD
 constexpr float    kTcxoVolts   = 1.8f;
 constexpr uint32_t kServoBaud   = 1000000;
 constexpr uint8_t  kServoId     = 1;      // factory default
+constexpr uint32_t kLimitDebounceMs = 20; // switch must hold a level this long before it counts
+
+// Servo positions: 0-4095 = 360 deg, 2047 = centre.
+// VALUES SUBJECT TO CHANGE 
+constexpr int16_t  LOAD_POS     = 2047;   // hook open, drone can be hooked on
+constexpr int16_t  LOCK_POS     = 0;   // hook closed, drone held
+constexpr int16_t  RELEASE_POS  = 2047;   // hook open, drone falls free
+constexpr uint16_t kServoSpeed  = 1500;   // steps/s (50 ~ 0.73 RPM, max ~3073)
+constexpr uint8_t  kServoAcc    = 50;     // 0-150, lower = gentler (unit undocumented)
+constexpr int16_t  kJiggleDistance = 100;   // distance each side of RELEASE_POS, TBD
+constexpr int      kJiggleTimes  = 3;
+constexpr uint32_t kJiggleStepMs = 200;   // time allowed per move before the next one, TBD
+
+// END SERVO SETTINGS
 
 enum State  {
     LOAD,
     STANDBY,
-    NOT_LOADED,
     ARMED,
     SOFTWARE_ERROR,
     DEPLOYING,
@@ -169,6 +180,10 @@ enum State  {
 State state = STANDBY;
 uint32_t TimeStateEntered;
 SX1262 radio = new Module(RADIO_CS, RADIO_DIO1, RADIO_RST, RADIO_BUSY);
+SMS_STS servo;               // servo object
+bool servoUp = false;
+bool     limitRaw      = false;   // last raw switch reading, before debounce
+uint32_t tLimitChanged = 0;       // millis() when limitRaw last changed
 bool radioUp = false;        // RadioBegin() succeeded; if false, never arm (no telemetry possible)
 uint16_t cmdSeq = 0;         // command counter (header.seq on WAKE/SLEEP/RESTART)
 
@@ -202,19 +217,19 @@ bool DeployCommand = false;
 bool EndCommand = false;    
 bool AckCommand = false;    
 
+bool LimitClosed = false;     // true = drone present. Debounced, updated by ReadLimitSwitch() every loop
+
 // END: GLOBALS USED IN INTERFACE
 
 
 
 
-bool LimitClosed = true;     // true = drone present. Not read from LIMIT_PIN yet (GPIO TBD)
 
 /** Name of a state, for serial prints. */
 const char* StateName(State s){
     switch(s){
         case LOAD:           return "LOAD";
         case STANDBY:        return "STANDBY";
-        case NOT_LOADED:     return "NOT_LOADED";
         case ARMED:          return "ARMED";
         case SOFTWARE_ERROR: return "SOFTWARE_ERROR";
         case DEPLOYING:      return "DEPLOYING";
@@ -237,26 +252,19 @@ bool StateChange(State to){
     switch(from){
         case STANDBY:
             if(to == LOAD)       { UpdateState(to); Serial.println("  [servo -> LOAD_POS]"); return true; }
-            if(to == NOT_LOADED) { UpdateState(to); return true; }
-            if(to == ARMED)      { UpdateState(to); Serial.println("  [send WAKE, reset health]"); Transmit(mapds::buildWake(cmdSeq++)); return true; }
+            if(to == ARMED)    { UpdateState(to); Serial.println("  [send WAKE, reset health]"); Transmit(mapds::buildWake(cmdSeq++)); return true; }
             break;
         case LOAD:
             if(to == STANDBY)    { UpdateState(to); Serial.println("  [servo -> LOCK_POS]"); return true; }
             break;
-        case NOT_LOADED:
-            if(to == STANDBY)    { UpdateState(to); return true; }
-            if(to == LOAD)       { UpdateState(to); Serial.println("  [servo -> LOAD_POS]"); return true; }
-            break;
         case ARMED:
             if(to == STANDBY)        { UpdateState(to); Serial.println("  [send SLEEP]"); Transmit(mapds::buildSleep(cmdSeq++)); return true; }
-            if(to == NOT_LOADED)     { UpdateState(to); Serial.println("  [send SLEEP]"); Transmit(mapds::buildSleep(cmdSeq++)); return true; }
             if(to == SOFTWARE_ERROR) { UpdateState(to); Serial.println("  [send RESTART]"); Transmit(mapds::buildRestart(cmdSeq++)); return true; }
             if(to == DEPLOYING)      { UpdateState(to); Serial.println("  [servo -> RELEASE_POS]"); return true; }
             break;
         case SOFTWARE_ERROR:
             if(to == ARMED)      { UpdateState(to); Serial.println("  [send WAKE, reset health]"); Transmit(mapds::buildWake(cmdSeq++)); return true; }
             if(to == STANDBY)    { UpdateState(to); Serial.println("  [send SLEEP]"); Transmit(mapds::buildSleep(cmdSeq++)); return true; }
-            if(to == NOT_LOADED) { UpdateState(to); Serial.println("  [send SLEEP]"); Transmit(mapds::buildSleep(cmdSeq++)); return true; }
             break;
         case DEPLOYING:
             if(to == DEPLOYED)     { UpdateState(to); return true; }
@@ -279,24 +287,26 @@ bool StateChange(State to){
 
 // STATES
 void Load(){
-    // exits: Load off -> STANDBY
+    servo.WritePosEx(kServoId, LOAD_POS, kServoSpeed, kServoAcc);
+    if (!LoadCommand && LimitClosed) StateChange(STANDBY);
 }
 
 void Standby(){
-    // exits: Load on -> LOAD, limit OPEN -> NOT_LOADED, Arm on -> ARMED
-}
+    servo.WritePosEx(kServoId, LOCK_POS, kServoSpeed, kServoAcc);
 
-void NotLoaded(){
-    // exits: limit CLOSED -> STANDBY, Load on -> LOAD
+    if (LoadCommand) StateChange(LOAD);
+
+    else if (ArmCommand && LimitClosed) StateChange(ARMED);
+
 }
 
 void Armed(){
-    // exits: Arm off -> STANDBY, limit OPEN -> NOT_LOADED, software fault -> SOFTWARE_ERROR,
+    // exits: Arm off -> STANDBY, limit OPEN -> STANDBY, software fault -> SOFTWARE_ERROR,
     //        Deploy on and 15 s up -> DEPLOYING
 }
 
 void SoftwareError(){
-    // exits: 1 min up -> ARMED, Arm off -> STANDBY, limit OPEN -> NOT_LOADED
+    // exits: 1 min up -> ARMED, Arm off -> STANDBY, limit OPEN -> STANDBY
 }
 
 void Deploying(){
@@ -324,10 +334,26 @@ void PowerOn(){
     pinMode(ADC_CTRL, OUTPUT);
     digitalWrite(ADC_CTRL, kAdcCtrlOn);           // battery divider on, and left on
     analogSetPinAttenuation(VBAT_PIN, ADC_11db);  // 0 to ~3.1 V; a full LiPo reads ~857 mV
+
+    pinMode(LIMIT_PIN, INPUT_PULLUP);             // switch to GND: LOW = CLOSED
+    LimitClosed = digitalRead(LIMIT_PIN) == LOW;  // start from the real level, so boot doesn't see a false OPEN
+    limitRaw    = LimitClosed;
 }
 
 uint32_t ReadBatteryMv(){
     return analogReadMilliVolts(VBAT_PIN) * 49 / 10;   // undo the 390k/100k divider (x4.9)
+}
+
+/** Debounced read of the limit switch into LimitClosed. Call every loop. */
+void ReadLimitSwitch(){
+    bool raw = digitalRead(LIMIT_PIN) == LOW;          // LOW = CLOSED = drone present
+    if (raw != limitRaw) {                             // changed (or still bouncing): restart the clock
+        limitRaw = raw;
+        tLimitChanged = millis();
+    }
+    if (millis() - tLimitChanged >= kLimitDebounceMs) {
+        LimitClosed = limitRaw;                        // held steady long enough: accept it
+    }
 }
 
 bool RadioBegin(){
@@ -339,6 +365,18 @@ bool RadioBegin(){
         return false;
     }
     radio.startReceive();   // DDS listens by default; SendCommand() switches to TX briefly
+    return true;
+}
+
+bool ServoBegin(){
+    Serial1.begin(kServoBaud, SERIAL_8N1, SERVO_RX, SERVO_TX);
+    servo.pSerial = &Serial1;
+    int pingResult = servo.Ping(kServoId);
+    if (pingResult == -1) {
+        Serial.printf("Servo %d not answering (check 12 V, wiring, UART mode)\n", kServoId);
+        return false;
+    }
+    Serial.printf("Servo %d OK\n", kServoId);
     return true;
 }
 
@@ -405,15 +443,16 @@ void setup() {
     PowerOn();
     Serial.begin(115200);
     radioUp = RadioBegin();
+    servoUp = ServoBegin();
 }
 
 void loop() {
     ReadPacket();   // keeps the dcm* globals fresh in every state
+    ReadLimitSwitch();    // keeps LimitClosed fresh in every state
 
     switch(state){
         case LOAD:           Load();          break;
         case STANDBY:        Standby();       break;
-        case NOT_LOADED:     NotLoaded();     break;
         case ARMED:          Armed();         break;
         case SOFTWARE_ERROR: SoftwareError(); break;
         case DEPLOYING:      Deploying();     break;
