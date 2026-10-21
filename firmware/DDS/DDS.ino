@@ -5,8 +5,9 @@
  * DCM's telemetry to decide whether the drone is healthy enough to deploy.
  * Design: boeing fsm v3(1).png at the repo root.
  *
- * The Heltec hosts its own Wi-Fi and cockpit page. LOAD requests enter the
- * tested loading FSM. ARM checks, deployment, recovery, and operator exits run on DDS.
+ * The web UI is not part of this file yet. Every operator input and every
+ * indicator is a plain variable, so a web layer can later set the switches
+ * and read the state and lights. Until then, the serial monitor stands in.
  *
  * ---------------------------------------------------------------- STATES
  *   LOAD, STANDBY, ARMED, SOFTWARE_ERROR,
@@ -47,7 +48,7 @@
  *   Every timer is "time since the transition that started it": save millis() once, on the arrow.
  *
  * ---------------------------------------------------------------- INDICATORS
- *   Ready display  ARMED, 15 s elapsed, fresh telemetry, and all mechanical/software checks passed
+ *   Armed light    ARMED and the 15 s timer is up (that is also when Deploy is allowed)
  *   Error light    SOFTWARE_ERROR, DEPLOY_ERROR, DEPLOY_FAILURE
  *   Status         DEPLOYED = success, DEPLOY_FAILURE = failure
  *   DDS battery    ddsBatteryMv, the Heltec's own LiPo
@@ -72,11 +73,11 @@
  *             st.Ping(id)                                -1 = no reply (check at boot)
  *             st.ReadPos(id)                             current position (useful for the jiggle)
  *   LOAD_POS, LOCK_POS, RELEASE_POS: TBD on the bench.
- *   Jiggle: 3 small inward/return cycles above RELEASE_POS (100 counts, clamped to 0-4095), TBD.
+ *   Jiggle: 3 small moves either side of RELEASE_POS (~ +/-100 counts, TBD), then back to RELEASE_POS.
  *
  * ---------------------------------------------------------------- SERIAL (115200)
- *   Every transition prints "FROM -> TO" and its action. The temporary bench-test
- *   section near setup() accepts L/l to request LOAD; it uses the real limit switch.
+ *   Every transition prints "FROM -> TO" and its action. The serial test stand-in
+ *   (keys for the switches, the limit switch, WAKE/SLEEP) was removed on 2026-10-16.
  *
  * ---------------------------------------------------------------- OPEN ISSUES
  *   - Command collisions: the DCM is deaf for ~140 ms per second while it transmits, so a
@@ -115,16 +116,12 @@
  *
  * ---------------------------------------------------------------- BUILD
  *   Board:      "Heltec WiFi LoRa 32(V3)" (esp32 core 3.x)
- *   Libraries:  RadioLib, SCServo (FT&WS). WiFi is bundled with the ESP32 board package.
+ *   Libraries:  RadioLib, SCServo (FT&WS, Library Manager)
  */
 
 #include <SPI.h>
-
 #include <RadioLib.h>   // SX1262
 #include <SCServo.h>    // Feetech ST3215 bus servo (SMS_STS class)
-#include <WiFi.h>
-#include <WebServer.h> // bundled with the ESP32 board package
-#include "web_assets.h"
 
 #include "../shared/protocol.h"
 
@@ -161,24 +158,14 @@ constexpr uint8_t  kServoId     = 1;      // factory default
 
 // Servo positions: 0-4095 = 360 deg, 2047 = centre.
 // VALUES SUBJECT TO CHANGE 
-constexpr int16_t  LOAD_POS     = 0;      // 0 degrees: loading opening open
-constexpr int16_t  LOCK_POS     = 2048;   // 180 degrees: loading opening closed
-constexpr int16_t  RELEASE_POS  = 0;      // 0 degrees: hook open, drone falls free
-constexpr uint16_t kServoSpeed  = 2900;   // requested steps/s; actual speed depends on servo configuration and load
+constexpr int16_t  LOAD_POS     = 2047;   // hook open, drone can be hooked on
+constexpr int16_t  LOCK_POS     = 0;   // hook closed, drone held
+constexpr int16_t  RELEASE_POS  = 2047;   // hook open, drone falls free
+constexpr uint16_t kServoSpeed  = 1500;   // steps/s (50 ~ 0.73 RPM, max ~3073)
 constexpr uint8_t  kServoAcc    = 50;     // 0-150, lower = gentler (unit undocumented)
-constexpr int16_t  kJiggleDistance = 100;   // recovery excursion above RELEASE_POS, clamped to 0-4095; TBD
+constexpr int16_t  kJiggleDistance = 100;   // distance each side of RELEASE_POS, TBD
 constexpr int      kJiggleTimes  = 3;
 constexpr uint32_t kJiggleStepMs = 200;   // time allowed per move before the next one, TBD
-
-// ARM / DEPLOY timing: milliseconds, always checked across loop passes.
-constexpr uint32_t kArmReadyMs = 15000;
-constexpr uint32_t kTelemetryFaultMs = 10000;
-constexpr uint32_t kTelemetryFreshMs = 3500;
-constexpr uint32_t kSoftwareRecoveryMs = 60000;
-constexpr uint32_t kDeployTimeoutMs = 10000;
-constexpr uint32_t kServoCheckTimeoutMs = 250;
-constexpr uint32_t kServoQueueTimeoutMs = 500;
-constexpr uint32_t kRadioTxTimeoutMs = 2000;
 
 // END SERVO SETTINGS
 
@@ -214,13 +201,9 @@ uint32_t TimeStateEntered;
 SX1262 radio = new Module(RADIO_CS, RADIO_DIO1, RADIO_RST, RADIO_BUSY);
 SMS_STS servo;               // servo object
 bool servoUp = false;
-bool servoMovePending = false; // latest requested target; never queue repeated positions
-int16_t servoTarget = LOCK_POS;
-bool loadPresenceTiming = false;
-uint32_t tLoadPresenceStarted = 0;
 bool     limitRaw      = false;   // last raw switch reading, before debounce
 uint32_t tLimitChanged = 0;       // millis() when limitRaw last changed
-bool radioUp = false;        // RadioBegin() succeeded; if false, the WAKE/software check fails
+bool radioUp = false;        // RadioBegin() succeeded; if false, never arm (no telemetry possible)
 uint16_t cmdSeq = 0;         // command counter (header.seq on WAKE/SLEEP/RESTART)
 uint16_t lastSeq = 0;        // seq of the last valid frame, set by ReadPacket()
 int missCounter = 0;         // gaps in seq, counted by ReadPacket()
@@ -247,12 +230,10 @@ float    dcmAccelMps2[3] = {};     // x, y, z
 float    dcmGyroDps[3]   = {};
 float    dcmMagGauss[3]  = {};
 uint32_t tLastPacket = 0;    // millis() when the last valid frame arrived
-bool hasTelemetry = false; // millis() == 0 is a valid timestamp, not a validity flag
-uint16_t lastTelemetrySeq = 0;
 float    lastRssi    = 0;    // dBm, of the last valid frame
 float    lastSnr     = 0;    // dB
 
-bool LoadCommand = false;   // one-shot LOAD request; consumed when entering LOAD
+bool LoadCommand = false;
 bool ArmCommand = false;
 bool DeployCommand = false;
 bool EndCommand = false;    
@@ -268,245 +249,6 @@ bool LimitClosed = false;     // true = drone present. Debounced, updated by Rea
 
 // END: GLOBALS USED IN INTERFACE
 
-// Check results are cached by the loop; expanding the GUI never runs a test.
-enum CheckResult : uint8_t { CHECK_NOT_RUN, CHECK_RUNNING, CHECK_PASS, CHECK_FAIL, CHECK_NO_DATA, CHECK_STOPPED };
-CheckResult checkPresence = CHECK_NOT_RUN, checkLock = CHECK_NOT_RUN;
-CheckResult checkServo = CHECK_NOT_RUN, checkWake = CHECK_NOT_RUN;
-CheckResult checkTelemetry = CHECK_NOT_RUN, checkPacketLoss = CHECK_NOT_RUN;
-CheckResult checkSensors[4] = {CHECK_NOT_RUN, CHECK_NOT_RUN, CHECK_NOT_RUN, CHECK_NOT_RUN};
-CheckResult checkArmTimer = CHECK_NOT_RUN;
-const char* faultReason = "";
-
-// One outgoing radio slot; a newer state command replaces an unsent old command.
-// No retries or new packet types. A TX result is not an acknowledgment from DCM.
-bool radioTxPending = false, radioTransmitting = false;
-mapds::Header queuedRadioCommand = {}, activeRadioCommand = {};
-uint32_t tRadioTxStarted = 0;
-CheckResult lastRadioTxResult = CHECK_NOT_RUN;
-int16_t lastRadioTxError = 0;
-
-bool armWakeSent = false, armTelemetrySeen = false;
-uint32_t tArmWakeSent = 0, tArmLastTelemetry = 0;
-uint16_t armPreviousSeq = 0;
-uint32_t missedPacketTimes[4] = {};
-uint8_t missedPacketCount = 0, missedPacketIndex = 0;
-bool sensorBadTiming[4] = {};
-uint32_t sensorBadSince[4] = {};
-
-// Non-blocking servo PING transaction using the existing servo bus protocol.
-// No additional library; response is six bytes: FF FF ID 02 STATUS CHECKSUM.
-enum ServoPingPhase : uint8_t { PING_IDLE, PING_DRAIN, PING_WAIT };
-ServoPingPhase servoPingPhase = PING_IDLE;
-uint32_t tServoPingStarted = 0;
-uint8_t servoPingReply[6] = {};
-uint8_t servoPingReplySize = 0;
-uint8_t jiggleStep = 0;
-bool jiggleCommandIssued = false;
-uint32_t tJiggleStep = 0;
-
-const char* CheckName(CheckResult result){
-    switch (result) {
-        case CHECK_RUNNING: return "RUNNING";
-        case CHECK_PASS: return "PASS";
-        case CHECK_FAIL: return "FAIL";
-        case CHECK_NO_DATA: return "NO_DATA";
-        case CHECK_STOPPED: return "STOPPED";
-        default: return "NOT_RUN";
-    }
-}
-
-CheckResult MechanicalResult(){
-    if (checkPresence == CHECK_FAIL || checkLock == CHECK_FAIL || checkServo == CHECK_FAIL) return CHECK_FAIL;
-    if (checkPresence == CHECK_PASS && checkLock == CHECK_PASS && checkServo == CHECK_PASS) return CHECK_PASS;
-    if (checkServo == CHECK_STOPPED) return CHECK_STOPPED;
-    return checkServo == CHECK_NOT_RUN ? CHECK_NOT_RUN : CHECK_RUNNING;
-}
-
-CheckResult SoftwareResult(){
-    if (checkWake == CHECK_NOT_RUN) return CHECK_NOT_RUN;
-    if (checkWake == CHECK_FAIL || checkTelemetry == CHECK_FAIL || checkPacketLoss == CHECK_FAIL || checkArmTimer == CHECK_FAIL) return CHECK_FAIL;
-    for (int i = 0; i < 4; ++i) if (checkSensors[i] == CHECK_FAIL) return CHECK_FAIL;
-    if (checkWake == CHECK_STOPPED || checkTelemetry == CHECK_STOPPED || checkPacketLoss == CHECK_STOPPED || checkArmTimer == CHECK_STOPPED) return CHECK_STOPPED;
-    for (int i = 0; i < 4; ++i) if (checkSensors[i] == CHECK_STOPPED) return CHECK_STOPPED;
-    if (checkWake != CHECK_PASS || checkTelemetry != CHECK_PASS || checkPacketLoss != CHECK_PASS || checkArmTimer != CHECK_PASS) return CHECK_RUNNING;
-    for (int i = 0; i < 4; ++i) if (checkSensors[i] != CHECK_PASS) return CHECK_RUNNING;
-    return CHECK_PASS;
-}
-
-bool ArmPrerequisites(){
-    return LimitClosed && limitRaw && servoTarget == LOCK_POS && !servoMovePending && !LoadCommand;
-}
-
-bool CanRequestArm(){
-    return state == STANDBY && !ArmCommand && ArmPrerequisites() && !ddsResetPending;
-}
-
-bool CanRequestDeploy(){
-    return state == ARMED && ArmCommand && !DeployCommand && ArmPrerequisites() &&
-           armWakeSent && armTelemetrySeen && millis() - tArmLastTelemetry <= kTelemetryFreshMs &&
-           MechanicalResult() == CHECK_PASS && SoftwareResult() == CHECK_PASS &&
-           !radioTransmitting && !radioTxPending && !ddsResetPending;
-}
-
-const char* ArmBlockedReason(){
-    if (ddsResetPending) return "DDS is restarting.";
-    if (state != STANDBY) return "ARM requires STANDBY. Finish loading or end the current operation.";
-    if (!LimitClosed || !limitRaw) return "No drone is attached. The presence switch must be closed.";
-    if (servoTarget != LOCK_POS) return "The lock must be commanded closed before arming.";
-    return "Wait for the loading movement or pending command to finish.";
-}
-
-const char* DeployBlockedReason(){
-    if (state != ARMED || !ArmCommand) return "Arm DDS before requesting deployment.";
-    if (!LimitClosed || !limitRaw) return "The drone is no longer attached.";
-    if (servoTarget != LOCK_POS || servoMovePending) return "The lock must be closed and its command sent.";
-    if (MechanicalResult() == CHECK_FAIL) return "Mechanical check failed. See its details, then disarm and retry.";
-    if (MechanicalResult() != CHECK_PASS) return "Wait for the mechanical check to finish.";
-    if (!armWakeSent) return "Waiting for the WAKE transmission to finish.";
-    if (!armTelemetrySeen || millis() - tArmLastTelemetry > kTelemetryFreshMs) return "Waiting for current DCM telemetry.";
-    if (SoftwareResult() == CHECK_FAIL) return "Software check failed. See its details.";
-    if (millis() - tArmWakeSent < kArmReadyMs) return "The 15-second readiness period is still running.";
-    return "Wait for all software checks and pending commands to finish.";
-}
-
-void ClearOperatorCommands(){
-    LoadCommand = ArmCommand = DeployCommand = EndCommand = AckCommand = false;
-}
-
-void StopPendingChecks(){
-    CheckResult* pending[] = {&checkServo, &checkWake, &checkTelemetry, &checkPacketLoss, &checkArmTimer,
-                             &checkSensors[0], &checkSensors[1], &checkSensors[2], &checkSensors[3]};
-    for (CheckResult* result : pending) if (*result == CHECK_RUNNING) *result = CHECK_STOPPED;
-}
-
-void BeginArmChecks(){
-    checkPresence = LimitClosed ? CHECK_PASS : CHECK_FAIL;
-    checkLock = servoTarget == LOCK_POS ? CHECK_PASS : CHECK_FAIL;
-    checkServo = checkWake = checkTelemetry = checkArmTimer = CHECK_RUNNING;
-    checkPacketLoss = CHECK_NO_DATA;
-    for (int i = 0; i < 4; ++i) {
-        checkSensors[i] = CHECK_NO_DATA;
-        sensorBadTiming[i] = false;
-    }
-    armWakeSent = armTelemetrySeen = false;
-    missedPacketCount = missedPacketIndex = 0;
-    DeployCommand = false;
-    faultReason = "";
-    servoPingReplySize = 0;
-    servoPingPhase = PING_DRAIN;
-    tServoPingStarted = millis();
-}
-
-void ServiceServoCheck(){
-    if (servoPingPhase == PING_IDLE) return;
-    if (millis() - tServoPingStarted >= kServoCheckTimeoutMs) {
-        checkServo = CHECK_FAIL;
-        servoUp = false;
-        servoPingPhase = PING_IDLE;
-        return;
-    }
-    if (servoPingPhase == PING_DRAIN) {
-        // Drain at most 24 stale bytes per pass; never spin waiting for input.
-        for (int i = 0; i < 24 && Serial1.available() > 0; ++i) Serial1.read();
-        if (Serial1.available() > 0 || Serial1.availableForWrite() < 6) return;
-        uint8_t ping[] = {0xFF, 0xFF, kServoId, 2, 1, static_cast<uint8_t>(~(kServoId + 3))};
-        Serial1.write(ping, sizeof(ping));
-        servoPingPhase = PING_WAIT;
-        return;
-    }
-    for (int i = 0; i < 24 && Serial1.available() > 0; ++i) {
-        servoPingReply[servoPingReplySize++] = static_cast<uint8_t>(Serial1.read());
-        if (servoPingReplySize < sizeof(servoPingReply)) continue;
-        const uint8_t checksum = static_cast<uint8_t>(~(servoPingReply[2] + servoPingReply[3] + servoPingReply[4]));
-        if (servoPingReply[0] == 0xFF && servoPingReply[1] == 0xFF &&
-            servoPingReply[2] == kServoId && servoPingReply[3] == 2 && servoPingReply[5] == checksum) {
-            // Communication success does not prove physical hook position.
-            servoUp = servoPingReply[4] == 0;
-            checkServo = servoUp ? CHECK_PASS : CHECK_FAIL;
-            servoPingPhase = PING_IDLE;
-            return;
-        }
-        memmove(servoPingReply, servoPingReply + 1, sizeof(servoPingReply) - 1);
-        servoPingReplySize = sizeof(servoPingReply) - 1;
-    }
-}
-
-uint8_t RecentMissedPackets(){
-    uint8_t count = 0;
-    for (int i = 0; i < missedPacketCount; ++i) {
-        if (millis() - missedPacketTimes[i] < kTelemetryFaultMs) ++count;
-    }
-    return count; // capped at four: enough to detect more than three
-}
-
-bool TrackArmTelemetry(uint16_t sequence){
-    if (state != ARMED || !armWakeSent) return true;
-    if (armTelemetrySeen) {
-        uint16_t delta = static_cast<uint16_t>(sequence - armPreviousSeq);
-        if (delta == 0) return false; // duplicates must not keep the health timer alive
-        // Normal uint16 rollover is forward. A backward jump/boot sequence zero
-        // resynchronizes. The current wire format has no independent boot ID.
-        if (delta >= 0x8000 || (sequence == 0 && armPreviousSeq != 65535)) delta = 1;
-        const uint16_t missed = delta - 1;
-        for (int i = 0; i < missed && i < 4; ++i) {
-            missedPacketTimes[missedPacketIndex] = millis();
-            missedPacketIndex = (missedPacketIndex + 1) % 4;
-            if (missedPacketCount < 4) ++missedPacketCount;
-        }
-    }
-    armPreviousSeq = sequence;
-    tArmLastTelemetry = millis();
-    armTelemetrySeen = true;
-    return true;
-}
-
-void UpdateArmHealth(){
-    if (!armWakeSent) return;
-    const uint32_t now = millis();
-    const uint32_t age = now - (armTelemetrySeen ? tArmLastTelemetry : tArmWakeSent);
-    checkTelemetry = age >= kTelemetryFaultMs ? CHECK_FAIL :
-        (armTelemetrySeen && age <= kTelemetryFreshMs ? CHECK_PASS : CHECK_RUNNING);
-    const bool fresh = armTelemetrySeen && age <= kTelemetryFreshMs;
-    checkPacketLoss = RecentMissedPackets() > 3 ? CHECK_FAIL : (fresh ? CHECK_PASS : CHECK_NO_DATA);
-    checkArmTimer = now - tArmWakeSent >= kArmReadyMs ? CHECK_PASS : CHECK_RUNNING;
-    if (!fresh) {
-        for (int i = 0; i < 4; ++i) {
-            if (checkSensors[i] != CHECK_FAIL) checkSensors[i] = CHECK_NO_DATA;
-            sensorBadTiming[i] = false;
-        }
-        return;
-    }
-    const bool flags[] = {dcmPmuOk, dcmImuOk, dcmMagOk, dcmBmeOk};
-    for (int i = 0; i < 4; ++i) {
-        if (flags[i]) {
-            sensorBadTiming[i] = false;
-            checkSensors[i] = CHECK_PASS;
-        } else {
-            if (!sensorBadTiming[i]) { sensorBadTiming[i] = true; sensorBadSince[i] = now; }
-            checkSensors[i] = now - sensorBadSince[i] >= kTelemetryFaultMs ? CHECK_FAIL : CHECK_RUNNING;
-        }
-    }
-}
-
-const char* SoftwareFaultReason(){
-    if (checkWake == CHECK_FAIL) return "WAKE transmission failed. This is not a DCM acknowledgment.";
-    if (checkTelemetry == CHECK_FAIL) return "No valid DCM telemetry for 10 seconds.";
-    if (checkPacketLoss == CHECK_FAIL) return "More than three missed packets within 10 seconds.";
-    for (int i = 0; i < 4; ++i) if (checkSensors[i] == CHECK_FAIL) return "A required DCM sensor reported failure for 10 seconds.";
-    return "";
-}
-
-
-// Shared by the serial test and web adapter; only called by the firmware loop.
-bool CanRequestLoad(){
-    return state == STANDBY && servoUp && !servoMovePending && !LoadCommand;
-}
-
-bool RequestLoad(){
-    if (!CanRequestLoad()) return false;
-    LoadCommand = true;
-    return true;
-}
 
 
 
@@ -567,28 +309,19 @@ bool StateChange(State to){
             if(to == STANDBY)    { UpdateState(to); Serial.println("  [send SLEEP, switches off]"); Transmit(Command::SLEEP); return true; }
             break;
     }
+    Serial.printf("No arrow %s -> %s, ignored\n", StateName(from), StateName(to));
     return false;
 }
 
 // STATES
 void Load(){
-    // Start timing only after the opening command has left our pending slot.
-    // A raw release resets immediately, including during debounce settling.
-    if (servoMovePending || !LimitClosed || !limitRaw) {
-        loadPresenceTiming = false;
-        return;
-    }
-    const uint32_t now = millis();
-    if (!loadPresenceTiming) {
-        tLoadPresenceStarted = now;
-        loadPresenceTiming = true;
-    }
-    if (now - tLoadPresenceStarted >= kLoadConfirmMs) {
-        StateChange(STANDBY); // request closing; does not assert physical closure
-    }
+    servo.WritePosEx(kServoId, LOAD_POS, kServoSpeed, kServoAcc);
+    if (!LoadCommand && LimitClosed) StateChange(STANDBY);
 }
 
 void Standby(){
+    servo.WritePosEx(kServoId, LOCK_POS, kServoSpeed, kServoAcc);
+
     if (LoadCommand) StateChange(LOAD);
 
     else if (ArmCommand && LimitClosed && radioUp) StateChange(ARMED);   // no radio = no telemetry: never arm
@@ -730,7 +463,6 @@ bool RadioBegin(){
 bool ServoBegin(){
     Serial1.begin(kServoBaud, SERIAL_8N1, SERVO_RX, SERVO_TX);
     servo.pSerial = &Serial1;
-    servo.IOTimeOut = kServoIoTimeoutMs;
     int pingResult = servo.Ping(kServoId);
     if (pingResult == -1) {
         Serial.printf("Servo %d not answering (check 12 V, wiring, UART mode)\n", kServoId);
@@ -753,38 +485,6 @@ bool Transmit(Command cmd){
     return true;
 }
 
-void ServiceRadioCommands(){
-    if (!radioUp) return;
-    if (radioTransmitting) {
-        const bool finished = digitalRead(RADIO_DIO1) == HIGH && (radio.getIrqFlags() & RADIOLIB_SX126X_IRQ_TX_DONE);
-        const bool timedOut = millis() - tRadioTxStarted >= kRadioTxTimeoutMs;
-        if (!finished && !timedOut) return;
-        const int16_t finishResult = radio.finishTransmit();
-        const int16_t receiveResult = radio.startReceive(); // clears TX IRQ before any RX read
-        radioTransmitting = false;
-        lastRadioTxResult = finished && finishResult == RADIOLIB_ERR_NONE && receiveResult == RADIOLIB_ERR_NONE ? CHECK_PASS : CHECK_FAIL;
-        lastRadioTxError = timedOut ? RADIOLIB_ERR_TX_TIMEOUT : (finishResult != RADIOLIB_ERR_NONE ? finishResult : receiveResult);
-        if (activeRadioCommand.msg == mapds::kMsgWake && state == ARMED) {
-            checkWake = lastRadioTxResult;
-            if (checkWake == CHECK_PASS) { armWakeSent = true; tArmWakeSent = millis(); }
-        }
-        if (receiveResult != RADIOLIB_ERR_NONE) radioUp = false;
-    }
-    if (!radioTxPending || !radioUp) return;
-    activeRadioCommand = queuedRadioCommand;
-    radioTxPending = false;
-    const int16_t result = radio.startTransmit(reinterpret_cast<uint8_t*>(&activeRadioCommand), sizeof(activeRadioCommand));
-    if (result != RADIOLIB_ERR_NONE) {
-        lastRadioTxResult = CHECK_FAIL;
-        lastRadioTxError = result;
-        if (radio.startReceive() != RADIOLIB_ERR_NONE) radioUp = false;
-        if (activeRadioCommand.msg == mapds::kMsgWake && state == ARMED) checkWake = CHECK_FAIL;
-        return;
-    }
-    radioTransmitting = true;
-    tRadioTxStarted = millis();
-}
-
 /**
  * Checks the radio for a TELEMETRY frame from our DCM. If one arrived, stores it in
  * the dcm* globals, tLastPacket, lastRssi and lastSnr, and returns its seq (0-65535).
@@ -792,7 +492,7 @@ void ServiceRadioCommands(){
  * Only the first call after a packet arrives sees it: reading clears it.
  */
 int32_t ReadPacket(){
-    if (!radioUp || radioTransmitting) { return -1; }
+    if (!radioUp) { return -1; }
     if (digitalRead(RADIO_DIO1) == LOW) { return -1; }   // DIO1 high = a packet is waiting
 
     size_t len = radio.getPacketLength();                // before readData(), which clears the packet
@@ -808,8 +508,6 @@ int32_t ReadPacket(){
     memcpy(&f, buf, sizeof(f));
     if (f.header.msg != mapds::kMsgTelemetry) { return -1; }
     if (f.header.pairId != mapds::kPairId) { return -1; }   // not our DCM
-
-    if (!TrackArmTelemetry(f.header.seq)) return -1;
 
     dcmPmuOk       = f.pmuOk;
     dcmGnssOk      = f.gnssOk;
@@ -832,279 +530,18 @@ int32_t ReadPacket(){
     if (f.header.seq != lastSeq + 1) missCounter++;
     lastSeq = f.header.seq;
     tLastPacket = millis();
-    hasTelemetry = true;
-    lastTelemetrySeq = f.header.seq;
     lastRssi    = rssi;
     lastSnr     = snr;
     return f.header.seq;
 }
-// ==================== BEGIN TEMPORARY LOAD BENCH TEST ====================
-// Set to 0 to disable. To remove completely, delete this block and the two
-// matching #if DDS_LOAD_BENCH_TEST hook blocks in setup() and loop().
-// Serial Monitor: 115200 baud, send L or l (any line-ending setting).
-// This only requests LOAD through the normal FSM. No simulated switch,
-// direct servo movement, ARM, or DEPLOY commands are provided here.
-#define DDS_LOAD_BENCH_TEST 1
-
-#if DDS_LOAD_BENCH_TEST
-void BenchLoadBegin(){
-    const char message[] = "[BENCH] Send L to open; hold real limit switch 1.5 s to close.\n";
-    if (Serial.availableForWrite() >= static_cast<int>(sizeof(message) - 1)) {
-        Serial.print(message);
-    }
-}
-
-void BenchLoadInput(){
-    // At most one already-buffered byte per loop: never wait for a full line.
-    if (Serial.available() <= 0) return;
-    const int key = Serial.read();
-    if (key != 'L' && key != 'l') return;
-
-    if (!RequestLoad()) {
-        const char message[] = "[BENCH] LOAD ignored: needs STANDBY and ready servo.\n";
-        if (Serial.availableForWrite() >= static_cast<int>(sizeof(message) - 1)) {
-            Serial.print(message);
-        }
-        return;
-    }
-}
-#endif
-// ===================== END TEMPORARY LOAD BENCH TEST =====================
-
-void StartDdsWifi(){
-    // Startup initialization only; no delay or loop waiting for a client.
-    if (!WiFi.mode(WIFI_AP) || !WiFi.softAP(kDdsWifiSsid, kDdsWifiPassword)) {
-        Serial.println("DDS Wi-Fi startup failed; hardware loop continues.");
-        return;
-    }
-    Serial.print("DDS Wi-Fi network: ");
-    Serial.println(kDdsWifiSsid);
-    Serial.print("DDS Wi-Fi address: ");
-    Serial.println(WiFi.softAPIP());
-}
-
-// --------------------------- COCKPIT WEB SERVER ---------------------------
-// Reads existing values only; no sensor queries, radio exchanges, or motion waits.
-void WebTelemetryNumber(String& json, const char* name, double value, bool valid, unsigned int decimals){
-    json += ",\"";
-    json += name;
-    json += "\":";
-    json += valid && isfinite(value) ? String(value, decimals) : String("null");
-}
-
-void WebTelemetryFlag(String& json, const char* name, bool value, bool fresh){
-    json += ",\"";
-    json += name;
-    json += "\":";
-    json += !fresh ? "null" : (value ? "true" : "false");
-}
-
-void WebTelemetryVector(String& json, const char* name, const float values[3], bool valid){
-    json += ",\"";
-    json += name;
-    json += "\":";
-    if (!valid || !isfinite(values[0]) || !isfinite(values[1]) || !isfinite(values[2])) {
-        json += "null";
-        return;
-    }
-    json += '[';
-    for (int i = 0; i < 3; ++i) {
-        if (i) json += ',';
-        json += String(values[i], 3);
-    }
-    json += ']';
-}
-
-void CockpitStatus(){
-    const uint32_t now = millis();
-    const bool fresh = hasTelemetry && now - tLastPacket <= kTelemetryFreshMs;
-    const bool fix = fresh && dcmGnssOk;
-    String json;
-    json.reserve(2000);
-    json += "{\"state\":\"";
-    json += StateName(state);
-    json += "\",\"lock\":\"";
-    json += !servoUp ? "UNKNOWN" : (servoTarget == LOCK_POS ? "CLOSED_TARGET" : (servoTarget == LOAD_POS || servoTarget == RELEASE_POS ? "OPEN_TARGET" : "UNKNOWN"));
-    json += "\",\"dcmPresent\":";
-    json += LimitClosed ? "true" : "false";
-    json += ",\"mechanical\":\"";
-    json += CheckName(MechanicalResult());
-    json += "\",\"software\":\"";
-    json += CheckName(SoftwareResult());
-    json += "\",\"loadAllowed\":";
-    json += CanRequestLoad() ? "true" : "false";
-    json += ",\"armAllowed\":";
-    json += CanRequestArm() ? "true" : "false";
-    json += ",\"deployAllowed\":";
-    json += CanRequestDeploy() ? "true" : "false";
-    json += ",\"armWaitMs\":";
-    json += String(state == ARMED && armWakeSent && now - tArmWakeSent < kArmReadyMs ? kArmReadyMs - (now - tArmWakeSent) : 0);
-    json += ",\"recoveryWaitMs\":";
-    json += String(state == SOFTWARE_ERROR && now - TimeStateEntered < kSoftwareRecoveryMs ? kSoftwareRecoveryMs - (now - TimeStateEntered) : 0);
-    json += ",\"fault\":\"";
-    json += faultReason;
-    json += "\",\"armBlockedReason\":\"";
-    json += CanRequestArm() ? "" : ArmBlockedReason();
-    json += "\",\"deployBlockedReason\":\"";
-    json += CanRequestDeploy() ? "" : DeployBlockedReason();
-    json += "\",\"checks\":{\"presence\":\"";
-    json += CheckName(checkPresence);
-    json += "\",\"lock\":\""; json += CheckName(checkLock);
-    json += "\",\"servo\":\""; json += CheckName(checkServo);
-    json += "\",\"wake\":\""; json += CheckName(checkWake);
-    json += "\",\"telemetry\":\""; json += CheckName(checkTelemetry);
-    json += "\",\"packetLoss\":\""; json += CheckName(checkPacketLoss);
-    json += "\",\"pmu\":\""; json += CheckName(checkSensors[0]);
-    json += "\",\"imu\":\""; json += CheckName(checkSensors[1]);
-    json += "\",\"mag\":\""; json += CheckName(checkSensors[2]);
-    json += "\",\"bme\":\""; json += CheckName(checkSensors[3]);
-    json += "\",\"timer\":\""; json += CheckName(checkArmTimer);
-    json += "\"},\"radioCommand\":{\"result\":\"";
-    json += CheckName(lastRadioTxResult);
-    json += "\",\"error\":"; json += String(lastRadioTxError);
-    json += "}";
-    json += ",\"servoReady\":";
-    json += servoUp ? "true" : "false";
-    json += ",\"radioConnected\":";
-    json += fresh ? "true" : "false";
-    json += ",\"telemetryStatus\":\"";
-    json += !radioUp ? "RADIO_ERROR" : (!hasTelemetry ? "NO_DATA" : (fresh ? "RECEIVING" : "STALE"));
-    json += "\",\"telemetry\":{\"hasTelemetry\":";
-    json += hasTelemetry ? "true" : "false";
-    WebTelemetryNumber(json, "ageMs", millis() - tLastPacket, hasTelemetry, 0);
-    WebTelemetryNumber(json, "lastTelemetrySeq", lastTelemetrySeq, fresh, 0);
-    WebTelemetryFlag(json, "dcmPmuOk", dcmPmuOk, fresh);
-    WebTelemetryFlag(json, "dcmGnssOk", dcmGnssOk, fresh);
-    WebTelemetryFlag(json, "dcmImuOk", dcmImuOk, fresh);
-    WebTelemetryFlag(json, "dcmMagOk", dcmMagOk, fresh);
-    WebTelemetryFlag(json, "dcmBmeOk", dcmBmeOk, fresh);
-    WebTelemetryNumber(json, "dcmLatDeg", dcmLatDeg, fix, 7);
-    WebTelemetryNumber(json, "dcmLonDeg", dcmLonDeg, fix, 7);
-    WebTelemetryNumber(json, "dcmGpsAltM", dcmGpsAltM, fix, 1);
-    WebTelemetryNumber(json, "dcmHdop", dcmHdop, fix, 2);
-    WebTelemetryNumber(json, "dcmBattPct", dcmBattPct, fresh && dcmPmuOk && dcmBattPct >= 0 && dcmBattPct <= 100, 0);
-    WebTelemetryNumber(json, "dcmPressurePa", dcmPressurePa, fresh && dcmBmeOk, 1);
-    WebTelemetryNumber(json, "dcmTempC", dcmTempC, fresh && dcmBmeOk, 1);
-    WebTelemetryNumber(json, "dcmHumidityPct", dcmHumidityPct, fresh && dcmBmeOk, 1);
-    WebTelemetryVector(json, "dcmAccelMps2", dcmAccelMps2, fresh && dcmImuOk);
-    WebTelemetryVector(json, "dcmGyroDps", dcmGyroDps, fresh && dcmImuOk);
-    WebTelemetryVector(json, "dcmMagGauss", dcmMagGauss, fresh && dcmMagOk);
-    WebTelemetryNumber(json, "lastRssi", lastRssi, fresh, 1);
-    WebTelemetryNumber(json, "lastSnr", lastSnr, fresh, 1);
-    json += "}}";
-    cockpitServer.sendHeader("Cache-Control", "no-store");
-    cockpitServer.send(200, "application/json", json);
-}
-
-void CockpitCommand(){
-    if (ddsResetPending) {
-        cockpitServer.send(409, "application/json", "{\"ok\":false,\"message\":\"DDS is restarting.\"}");
-        return;
-    }
-    const String body = cockpitServer.arg("plain");
-    bool accepted = false;
-    const char* message = "Unknown command.";
-    if (body == "{\"command\":\"LOAD\"}") {
-        accepted = RequestLoad();
-        message = "LOAD needs STANDBY and a ready servo.";
-    } else if (body == "{\"command\":\"ARM\"}") {
-        accepted = CanRequestArm();
-        if (accepted) ArmCommand = true;
-        message = ArmBlockedReason();
-    } else if (body == "{\"command\":\"DISARM\"}") {
-        accepted = state == ARMED || state == SOFTWARE_ERROR;
-        if (accepted) { ArmCommand = false; DeployCommand = false; }
-        message = "DISARM is available while armed or recovering from a software error.";
-    } else if (body == "{\"command\":\"DEPLOY\"}") {
-        accepted = CanRequestDeploy();
-        if (accepted) DeployCommand = true;
-        message = DeployBlockedReason();
-    } else if (body == "{\"command\":\"END\"}") {
-        accepted = state == DEPLOYED;
-        if (accepted) EndCommand = true;
-        message = "END / SLEEP is available after deployment.";
-    } else if (body == "{\"command\":\"ACK\"}") {
-        accepted = state == DEPLOY_FAILURE;
-        if (accepted) AckCommand = true;
-        message = "Failure acknowledgment is available after deployment failure.";
-    }
-    String response = accepted ? "{\"ok\":true,\"message\":\"Command accepted by DDS.\"}" : String("{\"ok\":false,\"message\":\"") + message + "\"}";
-    cockpitServer.send(accepted ? 202 : 409, "application/json", response);
-}
-
-void CockpitReset(){
-    if (cockpitServer.arg("plain") != "{\"confirmed\":true}") {
-        cockpitServer.send(400, "application/json", "{\"ok\":false,\"message\":\"Reset confirmation required.\"}");
-        return;
-    }
-    if (ddsResetPending) {
-        cockpitServer.send(409, "application/json", "{\"ok\":false,\"message\":\"DDS is already restarting.\"}");
-        return;
-    }
-    cockpitServer.sendHeader("Cache-Control", "no-store");
-    cockpitServer.send(202, "application/json", "{\"ok\":true,\"message\":\"DDS restart scheduled.\"}");
-    tDdsResetRequested = millis();
-    ddsResetPending = true;
-}
-
-void ServiceDdsReset(){
-    // No delay(), flush(), or waiting for a client acknowledgment. A lost
-    // response must not prevent an already confirmed restart from happening.
-    if (ddsResetPending && millis() - tDdsResetRequested >= kDdsResetResponseMs) {
-        ESP.restart();
-    }
-}
-
-void StartCockpitServer(){
-    if (WiFi.getMode() != WIFI_AP || WiFi.softAPIP() == IPAddress(0, 0, 0, 0)) return;
-    cockpitServer.on("/", HTTP_GET, [](){ cockpitServer.send_P(200, "text/html; charset=utf-8", WEB_MAIN_HTML); });
-    cockpitServer.on("/main.html", HTTP_GET, [](){ cockpitServer.send_P(200, "text/html; charset=utf-8", WEB_MAIN_HTML); });
-    cockpitServer.on("/cockpit_style.css", HTTP_GET, [](){ cockpitServer.send_P(200, "text/css; charset=utf-8", WEB_COCKPIT_CSS); });
-    cockpitServer.on("/interface_logic.js", HTTP_GET, [](){
-        cockpitServer.sendHeader("Cache-Control", "no-store");
-        cockpitServer.send_P(200, "application/javascript; charset=utf-8", WEB_INTERFACE_JS);
-    });
-    cockpitServer.on("/api/status", HTTP_GET, CockpitStatus);
-    cockpitServer.on("/api/command", HTTP_POST, CockpitCommand);
-    cockpitServer.on("/api/reset", HTTP_POST, CockpitReset);
-    cockpitServer.onNotFound([](){ cockpitServer.send(404, "text/plain", "Not found"); });
-    cockpitServer.enableDelay(false); // removes idle delay, not synchronous socket waits
-    cockpitServer.begin();
-    cockpitServerUp = true;
-    Serial.println("Open http://192.168.4.1/ after connecting to DDS Wi-Fi.");
-}
-
-void ServiceCockpit(){
-    if (!cockpitServerUp || ddsResetPending || radioTransmitting || servoPingPhase != PING_IDLE) return; // no more synchronous HTTP waits before restart
-    // The regular WebServer can block on slow requests/writes. Protect the
-    // continuous switch-hold interval by deferring HTTP until it ends/resets.
-    // Other HTTP work is NOT guaranteed non-blocking and needs bench validation.
-    if (state == LOAD && (loadPresenceTiming || limitRaw || LimitClosed)) return;
-    if (state == DEPLOY_ERROR) return; // short timed recovery movements take priority
-    cockpitServer.handleClient();
-}
-
 void setup() {
     PowerOn();
     Serial.begin(115200);
     radioUp = RadioBegin();
     servoUp = ServoBegin();
-    if (servoUp) {
-        servoTarget = LOCK_POS; // startup requests 180 degrees, independent of presence
-        servoMovePending = true;
-        ServiceServo();
-    }
-#if DDS_LOAD_BENCH_TEST
-    BenchLoadBegin(); // TEMPORARY LOAD BENCH TEST hook
-#endif
-    StartDdsWifi();
-    StartCockpitServer();
 }
 
 void loop() {
-    ServiceDdsReset();
-    ServiceRadioCommands();
-    ServiceServoCheck();
     ReadPacket();   // keeps the dcm* globals fresh in every state
     ReadLimitSwitch();    // keeps LimitClosed fresh in every state
     ddsBatteryMv = ReadBatteryMv();
@@ -1119,7 +556,4 @@ void loop() {
         case DEPLOYED:       Deployed();      break;
         case DEPLOY_FAILURE: DeployFailure(); break;
     }
-    ServiceServo();
-    ServiceRadioCommands();
-    ServiceCockpit();
 }
