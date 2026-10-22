@@ -99,7 +99,7 @@
       </div>
 
       <div class="topbar-right">
-        <div id="systemState" class="state-badge state-standby">STANDBY</div>
+        <div id="systemState" class="state-badge state-standby">OFFLINE</div>
 
         <div class="clock-box">
           <svg class="small-icon"><use href="#i-clock"></use></svg>
@@ -111,10 +111,10 @@
     <main class="dashboard">
 
       <section class="status-grid">
-        <div id="loadingBox" class="status-tile tile-danger">
+        <div id="loadingBox" class="status-tile tile-neutral">
           <svg class="status-icon"><use href="#i-lock"></use></svg>
           <div>
-            <div id="loadingValue" class="status-value">NOT LOADED</div>
+            <div id="loadingValue" class="status-value">NOT AVAILABLE</div>
             <div class="status-label">Loading Status</div>
           </div>
         </div>
@@ -127,7 +127,7 @@
           </div>
         </div>
 
-        <div id="batteryBox" class="status-tile tile-primary">
+        <div id="batteryBox" class="status-tile tile-neutral">
           <svg class="status-icon"><use href="#i-battery"></use></svg>
           <div>
             <div id="batteryValue" class="status-value">NOT AVAILABLE</div>
@@ -139,49 +139,46 @@
       <section class="middle-grid">
         <div class="panel">
           <div class="panel-header">
+            <div class="dds-panel-heading">
             <div class="panel-title">
               <svg class="header-icon"><use href="#i-shield"></use></svg>
               DDS Status
             </div>
-            <span id="readinessBadge" class="mini-badge">STANDBY</span>
+            <div class="dds-battery" title="Heltec LiPo voltage reported by ddsBatteryMv; not an estimated percentage.">
+              <svg class="small-icon"><use href="#i-battery"></use></svg>
+              <span>DDS Battery</span><strong id="ddsBatteryValue">NOT AVAILABLE</strong>
+            </div>
+            </div>
+            <span id="readinessBadge" class="mini-badge state-standby">OFFLINE</span>
           </div>
 
           <div class="status-list">
             <div class="status-row">
               <span class="status-name"><span id="presenceDot" class="status-dot dot-off"></span>DCM Presence</span>
-              <strong id="presenceStatus" class="check-value">NOT ATTACHED</strong>
+              <strong id="presenceStatus" class="check-value">NOT AVAILABLE</strong>
             </div>
 
             <div class="status-row">
-              <span class="status-name"><span id="lockDot" class="status-dot dot-off"></span>DDS Lock</span>
-              <strong id="lockStatus" class="check-value" title="Shows the requested lock position.">UNKNOWN</strong>
+              <span class="status-name"><span id="lockDot" class="status-dot dot-off"></span>DDS Lock <small>(commanded)</small></span>
+              <strong id="lockStatus" class="check-value" title="Commanded position inferred from the DDS state, not measured hook position. Recovery positions remain unavailable.">NOT AVAILABLE</strong>
             </div>
 
             <details class="check-details">
               <summary class="status-row">
                 <span class="status-name"><span id="mechanicalDot" class="status-dot dot-off"></span>Mechanical Check</span>
-                <strong id="mechanicalStatus" class="check-value">NOT CHECKED</strong>
+                <strong id="mechanicalStatus" class="check-value">NOT AVAILABLE</strong>
               </summary>
-              <div class="check-breakdown">
-                <div><span>Drone attached</span><strong id="check-presence">NOT CHECKED</strong></div>
-                <div><span>Lock commanded closed</span><strong id="check-lock">NOT CHECKED</strong></div>
-                <div title="Servo answered the ARM-time ping. This does not measure physical hook position."><span>Servo responding</span><strong id="check-servo">NOT CHECKED</strong></div>
-              </div>
+              <div id="mechanicalDetails" class="check-breakdown"><p>Details not available.</p></div>
             </details>
 
             <details class="check-details">
               <summary class="status-row">
                 <span class="status-name"><span id="softwareDot" class="status-dot dot-off"></span>Software Check</span>
-                <strong id="softwareStatus" class="check-value">NOT CHECKED</strong>
+                <strong id="softwareStatus" class="check-value">NOT AVAILABLE</strong>
               </summary>
-              <div class="check-breakdown">
-                <div title="DDS finished sending WAKE; receipt is confirmed by subsequent telemetry, not a separate acknowledgment."><span>Wake command sent</span><strong id="check-wake">NOT CHECKED</strong></div>
-                <div><span>Recent DCM update</span><strong id="check-telemetry">NOT CHECKED</strong></div>
-                <div><span>Updates arriving reliably</span><strong id="check-packetLoss">NOT CHECKED</strong></div>
-                <div title="Combined power system, motion sensor, compass, and environment sensor checks."><span>Sensors</span><strong id="check-sensors">NOT CHECKED</strong></div>
-                <div><span>15-second readiness period</span><strong id="check-timer">NOT CHECKED</strong></div>
-              </div>
+              <div id="softwareDetails" class="check-breakdown"><p>Details not available.</p></div>
             </details>
+            <button id="stateAction" class="mode-btn state-action" type="button" hidden>ACKNOWLEDGE FAILURE</button>
           </div>
         </div>
 
@@ -191,6 +188,7 @@
               <svg class="header-icon"><use href="#i-activity"></use></svg>
               DCM Telemetry
             </div>
+            <button id="endSleepBtn" class="mode-btn end-sleep-btn" type="button" disabled title="Available after deployment.">END / SLEEP</button>
           </div>
 
           <div class="telemetry-body">
@@ -230,7 +228,6 @@
               <tr><th scope="row" title="lastRssi">Signal strength</th><td id="rssiValue">NOT AVAILABLE</td></tr>
               <tr><th scope="row" title="lastSnr">Signal-to-noise ratio</th><td id="snrValue">NOT AVAILABLE</td></tr>
               <tr><th scope="row" title="lastTelemetrySeq">Packet sequence</th><td id="sequenceValue">NOT AVAILABLE</td></tr>
-              <tr><th scope="row">Last DCM Update</th><td id="packetAgeValue">NOT AVAILABLE</td></tr>
             </tbody></table>
           </details>
           </div>
@@ -250,7 +247,7 @@
             <div class="log-entry">
               <span class="log-time">--:--:--</span>
               <span class="log-badge info">INFO</span>
-              <span>Waiting for actual Heltec and DCM telemetry.</span>
+              <span>Waiting for the DDS connection.</span>
             </div>
           </div>
         </div>
@@ -266,27 +263,31 @@
           <div class="warning-content">
             <svg id="warningIcon" class="warning-main-icon warn"><use href="#i-warning"></use></svg>
             <div>
-              <div id="warningTitle" class="warning-title">DCM Telemetry Unavailable</div>
-              <div id="warningText" class="warning-text">No telemetry has been received.</div>
+              <div id="warningTitle" class="warning-title">DDS Disconnected</div>
+              <div id="warningText" class="warning-text">Connect to the DDS Wi-Fi to receive status.</div>
             </div>
           </div>
         </div>
       </section>
 
-      <section class="controls">
-        <button id="loadBtn" class="command-btn load-btn" type="button">
-          <svg><use href="#i-load"></use></svg>
-          <div><strong>LOAD</strong><span>Prepare DDS for DCM attachment</span></div>
+      <section class="controls" aria-label="Operator input levers">
+        <button id="loadLever" class="lever-control load-lever" type="button" role="switch" aria-checked="false" aria-label="LOAD input" aria-describedby="loadLeverHelp" data-known="false">
+          <svg class="lever-icon"><use href="#i-load"></use></svg>
+          <span class="lever-copy"><strong>LOAD</strong><span id="loadLeverHelp">Operator input</span></span>
+          <span class="lever-track" aria-hidden="true"><span class="lever-handle"></span></span>
+          <span id="loadLeverValue" class="lever-value" aria-live="polite">UNKNOWN</span>
         </button>
-
-        <button id="armBtn" class="command-btn arm-btn" type="button">
-          <svg><use href="#i-arm"></use></svg>
-          <div><strong id="armButtonLabel">ARM</strong><span id="armButtonHelp">Run checks and arm system</span></div>
+        <button id="armLever" class="lever-control arm-lever" type="button" role="switch" aria-checked="false" aria-label="ARM input" aria-describedby="armLeverHelp" data-known="false">
+          <svg class="lever-icon"><use href="#i-arm"></use></svg>
+          <span class="lever-copy"><strong>ARM</strong><span id="armLeverHelp">Operator input</span></span>
+          <span class="lever-track" aria-hidden="true"><span class="lever-handle"></span></span>
+          <span id="armLeverValue" class="lever-value" aria-live="polite">UNKNOWN</span>
         </button>
-
-        <button id="deployBtn" class="command-btn deploy-btn" type="button">
-          <svg><use href="#i-send"></use></svg>
-          <div><strong>DEPLOY</strong><span>Release DCM from DDS</span></div>
+        <button id="deployLever" class="lever-control deploy-lever" type="button" role="switch" aria-checked="false" aria-label="DEPLOY input" aria-describedby="deployLeverHelp" data-known="false">
+          <svg class="lever-icon"><use href="#i-send"></use></svg>
+          <span class="lever-copy"><strong>DEPLOY</strong><span id="deployLeverHelp">Operator input</span></span>
+          <span class="lever-track" aria-hidden="true"><span class="lever-handle"></span></span>
+          <span id="deployLeverValue" class="lever-value" aria-live="polite">UNKNOWN</span>
         </button>
       </section>
 

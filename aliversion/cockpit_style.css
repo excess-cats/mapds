@@ -144,6 +144,16 @@ svg { fill: currentColor; }
   font-weight: 800;
 }
 .mini-badge:not([class*="state-"]) { background: var(--secondary); color: white; }
+.dds-panel-heading { display: flex; align-items: center; gap: 20px; min-width: 0; }
+.dds-panel-heading .panel-title { white-space: nowrap; }
+.dds-battery { display: flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; color: var(--muted); }
+.dds-battery strong { color: var(--text); white-space: nowrap; }
+.dds-battery svg { flex-shrink: 0; }
+.status-name small { margin-left: 6px; font-size: 14px; color: var(--muted); }
+.state-action { margin: 10px 0; border-color: var(--warning); cursor: pointer; }
+.state-action[hidden] { display: none; }
+.end-sleep-btn { height: 38px; font-size: 16px; border-color: var(--warning); flex-shrink: 0; }
+.end-sleep-btn:disabled { background: var(--border); color: var(--muted); border-color: var(--secondary); opacity: .55; cursor: not-allowed; }
 
 /* DDS STATUS */
 .status-list { height: calc(100% - 58px); padding: 5px 20px; overflow-y: auto; }
@@ -228,24 +238,28 @@ svg { fill: currentColor; }
 
 /* CONTROLS */
 .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-.command-btn {
-  border: 0;
-  border-radius: 12px;
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 22px;
-  cursor: pointer;
+/* Maintained input levers; positions come only from the DDS status snapshot. */
+.lever-control {
+  --lever-accent: var(--primary);
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 16px 20px; border: 2px solid var(--border); border-radius: 12px;
+  background: var(--panel); color: var(--text); cursor: pointer; text-align: left;
 }
-.command-btn svg { width: 44px; height: 44px; flex: 0 0 auto; }
-.command-btn div { text-align: left; }
-.command-btn strong { display: block; font-size: 32px; font-weight: 800; letter-spacing: 1px; }
-.command-btn span { display: block; margin-top: 4px; font-size: 17px; font-weight: 500; opacity: .95; }
-.command-btn:disabled { opacity: .6; cursor: default; }
-.load-btn { background: var(--primary); }
-.arm-btn { background: var(--warning); color: #111; }
-.deploy-btn { background: var(--danger); }
+.arm-lever { --lever-accent: var(--warning); }
+.deploy-lever { --lever-accent: var(--danger); }
+.lever-icon { width: 36px; height: 36px; flex-shrink: 0; color: var(--lever-accent); }
+.lever-copy { flex: 1; }
+.lever-copy strong { display: block; font-size: 28px; letter-spacing: 1px; }
+.lever-copy > span { display: block; font-size: 16px; margin-top: 5px; color: var(--muted); }
+.lever-track { width: 74px; height: 38px; border: 2px solid var(--secondary); border-radius: 22px; padding: 4px; flex-shrink: 0; }
+.lever-handle { display: block; width: 26px; height: 26px; border-radius: 50%; background: var(--secondary); }
+.lever-control[aria-checked="true"] .lever-track { border-color: var(--lever-accent); }
+.lever-control[aria-checked="true"] .lever-handle { transform: translateX(34px); background: var(--lever-accent); }
+.lever-control[data-known="false"] .lever-track { visibility: hidden; }
+.lever-value { min-width: 85px; max-width: 105px; text-align: right; font-size: 16px; font-weight: 800; color: var(--muted); }
+.lever-control[data-pending="true"] .lever-value { color: var(--warning); }
+.lever-control:focus-visible { outline: 3px solid var(--lever-accent); outline-offset: 3px; }
+.lever-control:hover { border-color: var(--lever-accent); }
 
 /* NVIS: small muted color accents on dark surfaces, never bright filled tiles. */
 html[data-vision-mode="nvg"] {
@@ -272,7 +286,7 @@ html[data-vision-mode="nvg"] *::after { text-shadow: none; box-shadow: none; }
 html[data-vision-mode="nvg"] .status-tile,
 html[data-vision-mode="nvg"] .state-badge,
 html[data-vision-mode="nvg"] .mini-badge,
-html[data-vision-mode="nvg"] .command-btn,
+html[data-vision-mode="nvg"] .lever-control,
 html[data-vision-mode="nvg"] .log-badge {
   background: var(--panel);
   color: var(--text);
@@ -285,16 +299,16 @@ html[data-vision-mode="nvg"] .tile-warning,
 html[data-vision-mode="nvg"] .state-loading,
 html[data-vision-mode="nvg"] .state-arming,
 html[data-vision-mode="nvg"] .state-armed,
-html[data-vision-mode="nvg"] .arm-btn,
+html[data-vision-mode="nvg"] .arm-lever,
 html[data-vision-mode="nvg"] .log-badge.warning { color: var(--warning); border-color: var(--warning); }
 html[data-vision-mode="nvg"] .tile-danger,
 html[data-vision-mode="nvg"] .state-deploying,
 html[data-vision-mode="nvg"] .state-fault,
-html[data-vision-mode="nvg"] .deploy-btn,
+html[data-vision-mode="nvg"] .deploy-lever,
 html[data-vision-mode="nvg"] .reset-btn,
 html[data-vision-mode="nvg"] .log-badge.fault { color: var(--danger); border-color: var(--danger); }
 html[data-vision-mode="nvg"] .status-icon { opacity: 1; }
-html[data-vision-mode="nvg"] .command-btn span { opacity: 1; }
+html[data-vision-mode="nvg"] .lever-control[aria-checked="true"] .lever-handle { background: var(--lever-accent); }
 html[data-vision-mode="nvg"] button:hover { background: #101E17; }
 html[data-vision-mode="nvg"] button:focus-visible,
 html[data-vision-mode="nvg"] summary:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
@@ -326,3 +340,5 @@ html[data-vision-mode="nvg"] ::-webkit-scrollbar-thumb { background: #345443; bo
 .check-breakdown { padding: 0 0 10px 24px; font-size: 18px; color: var(--muted); }
 .check-breakdown > div { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; }
 .check-breakdown strong { flex-shrink: 0; font-size: 16px; }
+
+.check-breakdown p { margin: 10px 0; }
