@@ -323,9 +323,9 @@ uint8_t ReadPacket(){
  * Safe with no laptop attached: USB serial drops writes when no host is connected.
  */
 void PrintFrame(const mapds::TelemetryFrame &f){
-  Serial.printf("seq=%u ok pmu=%d gnss=%d imu=%d mag=%d bme=%d | lat=%.7f lon=%.7f alt=%.1fm hdop=%.1f | batt=%d%% | %.1fC %.0fPa %.0f%%\n",
+  Serial.printf("seq=%u ok pmu=%d gnss=%d imu=%d mag=%d bme=%d | lat=%.7f lon=%.7f alt=%.1fm hdop=%.1f | batt=%umV | %.1fC %.0fPa %.0f%%\n",
                 f.header.seq, f.pmuOk, f.gnssOk, f.imuOk, f.magOk, f.bmeOk, f.latDeg, f.lonDeg, f.gpsAltM, f.hdop,
-                f.battPct, f.tempC, f.pressurePa, f.humidityPct);
+                f.battMv, f.tempC, f.pressurePa, f.humidityPct);
   Serial.printf("    accel=%.2f,%.2f,%.2f m/s2 | gyro=%.1f,%.1f,%.1f dps | mag=%.3f,%.3f,%.3f G\n",
                 f.accelMps2[0], f.accelMps2[1], f.accelMps2[2],
                 f.gyroDps[0], f.gyroDps[1], f.gyroDps[2],
@@ -349,8 +349,8 @@ void CheckBattery(){
 
   float zeros[3] = {0, 0, 0};
   for (int i = 0; i < kBatteryCopies; i++) {
-    int battPct = pmuUp ? power.getBatteryPercent() : -1;
-    mapds::TelemetryFrame frame = mapds::buildTelemetry(seq, pmuUp, false, false, false, false, 0, 0, 0, 0, 0, battPct, 0, 0, zeros, zeros, zeros);
+    uint16_t battMv = pmuUp ? power.getBattVoltage() : 0;
+    mapds::TelemetryFrame frame = mapds::buildTelemetry(seq, pmuUp, false, false, false, false, 0, 0, 0, 0, 0, battMv, 0, 0, zeros, zeros, zeros);
     PrintFrame(frame);
 
     int16_t radio_status = radio.transmit(reinterpret_cast<uint8_t*>(&frame), sizeof(frame));
@@ -389,12 +389,12 @@ void Transmit(){
   float accelMps2[3];
   float gyroDps[3];
   float magGauss[3];
-  int battPct = power.getBatteryPercent();
+  uint16_t battMv = power.getBattVoltage();   // 0 with no battery
   bool imuOk = ReadIMU(accelMps2, gyroDps);
   bool magOk = ReadMag(magGauss);
   bool bmeOk = ReadBME(tempC, pressurePa, humidityPct);
   bool GPSOk = ReadGPS(latDeg, lonDeg, gpsAltM, hdop);
-  mapds::TelemetryFrame frame = mapds::buildTelemetry(seq, pmuUp, GPSOk, imuOk, magOk, bmeOk, latDeg, lonDeg, gpsAltM, hdop, pressurePa, battPct, tempC, humidityPct, accelMps2, gyroDps, magGauss);
+  mapds::TelemetryFrame frame = mapds::buildTelemetry(seq, pmuUp, GPSOk, imuOk, magOk, bmeOk, latDeg, lonDeg, gpsAltM, hdop, pressurePa, battMv, tempC, humidityPct, accelMps2, gyroDps, magGauss);
   PrintFrame(frame);
 
   if (radioUp) {

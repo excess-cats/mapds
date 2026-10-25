@@ -27,7 +27,7 @@
  *   Deploy only counts if it is turned on after the Armed light: ARMED turns it off until then.
  *   Clearing END/ACK on every state change means one pressed in another state can't fire later.
  *   CHECK BATTERY only counts in LOAD and STANDBY (DCM asleep): send CHECK_BATTERY, and the
- *   DCM replies with battery-only TELEMETRY that updates dcmBattPct.
+ *   DCM replies with battery-only TELEMETRY that updates dcmBattMv and dcmBattPct.
  *
  * ---------------------------------------------------------------- FSM
  *   STANDBY ------(Load on)---------> LOAD
@@ -54,7 +54,7 @@
  *   Error light    SOFTWARE_ERROR, DEPLOY_ERROR, DEPLOY_FAILURE
  *   Status         DEPLOYED = success, DEPLOY_FAILURE = failure
  *   DDS battery    ddsBatteryMv, the Heltec's own LiPo
- *   Warnings       no GPS fix (gnssOk false), DCM battery < 20 % (battPct -1 = on USB, no warning)
+ *   Warnings       no GPS fix (gnssOk false), DCM battery < 20 % (dcmBattPct -1 = on USB, no warning)
  *                  Shown only. They never cause a transition.
  *
  * ---------------------------------------------------------------- SOFTWARE FAULT (checked in ARMED only, once the 15 s are up)
@@ -152,6 +152,8 @@ constexpr int      kAdcCtrlOn   = HIGH;   // V3.4: HIGH confirmed on the bench; 
 constexpr int8_t   kTxPowerDbm  = 14;     // bench value; flight value TBD
 constexpr float    kTcxoVolts   = 1.8f;
 constexpr uint32_t kLimitDebounceMs = 20; // switch must hold a level this long before it counts
+constexpr uint16_t kDcmBattEmptyMv  = 3200; // DCM 18650: 0 %. Little charge left below this (PMU cuts at 3000)
+constexpr uint16_t kDcmBattFullMv   = 4200; // DCM 18650: 100 %
 
 // SERVO SETTINGS
 
@@ -226,7 +228,8 @@ double   dcmLonDeg      = 0;
 float    dcmGpsAltM     = 0;       // m above sea level
 float    dcmHdop        = 0;       // lower is better (~1 good, >5 poor)
 float    dcmPressurePa  = 0;
-int8_t   dcmBattPct     = -1;      // 0-100, or -1 with no battery
+uint16_t dcmBattMv      = 0;       // mV, or 0 with no battery
+int8_t   dcmBattPct     = -1;      // 0-100, or -1 with no battery. From dcmBattMv, by UpdateDcmBattPct()
 float    dcmTempC       = 0;
 float    dcmHumidityPct = 0;
 float    dcmAccelMps2[3] = {};     // x, y, z
@@ -450,6 +453,13 @@ uint32_t ReadBatteryMv(){
     return analogReadMilliVolts(VBAT_PIN) * 49 / 10;   // undo the 390k/100k divider (x4.9)
 }
 
+/** Sets dcmBattPct from dcmBattMv: a straight line from kDcmBattEmptyMv (0 %) to kDcmBattFullMv (100 %). */
+void UpdateDcmBattPct(){
+    if (dcmBattMv == 0) { dcmBattPct = -1; return; }   // no battery (on USB)
+    int32_t pct = (int32_t(dcmBattMv) - kDcmBattEmptyMv) * 100 / (kDcmBattFullMv - kDcmBattEmptyMv);
+    dcmBattPct = constrain(pct, 0, 100);
+}
+
 /** Debounced read of the limit switch into LimitClosed. Call every loop. */
 void ReadLimitSwitch(){
     bool raw = digitalRead(LIMIT_PIN) == LOW;          // LOW = CLOSED = drone present
@@ -533,7 +543,7 @@ int32_t ReadPacket(){
     dcmGpsAltM     = f.gpsAltM;
     dcmHdop        = f.hdop;
     dcmPressurePa  = f.pressurePa;
-    dcmBattPct     = f.battPct;
+    dcmBattMv      = f.battMv;
     dcmTempC       = f.tempC;
     dcmHumidityPct = f.humidityPct;
     for (int i = 0; i < 3; i++) {
@@ -541,6 +551,7 @@ int32_t ReadPacket(){
         dcmGyroDps[i]   = f.gyroDps[i];
         dcmMagGauss[i]  = f.magGauss[i];
     }
+    UpdateDcmBattPct();
     if (f.header.seq != lastSeq + 1) missCounter++;
     lastSeq = f.header.seq;
     tLastPacket = millis();

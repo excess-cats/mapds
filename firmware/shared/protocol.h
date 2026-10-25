@@ -54,7 +54,7 @@ struct __attribute__((packed)) TelemetryFrame {
 
   float   pressurePa;
 
-  int8_t  battPct;       // 0-100, or -1 with no battery
+  uint16_t battMv;       // mV, or 0 with no battery
 
   float   tempC;
   float   humidityPct;
@@ -67,7 +67,7 @@ struct __attribute__((packed)) TelemetryFrame {
 // Compile-time contracts: a layout change breaks the build, not the radio link.
 static_assert(sizeof(Header) == 4, "Header must be 4 bytes");
 static_assert(sizeof(bool) == 1, "wire format assumes 1-byte bool");
-static_assert(sizeof(TelemetryFrame) == 82, "TelemetryFrame must be 82 bytes");
+static_assert(sizeof(TelemetryFrame) == 83, "TelemetryFrame must be 83 bytes");
 static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "wire format is little-endian");
 
 // ---- Builders ----
@@ -106,14 +106,14 @@ inline Header buildCheckBattery(uint16_t seq) {
  * TELEMETRY: DCM -> DDS. Copies every value into the frame.
  * Parameters are in frame order.
  *
- * gnssOk means the GPS has a fix. battPct is -1 with no battery.
+ * gnssOk means the GPS has a fix. battMv is 0 with no battery.
  * accelMps2, gyroDps, magGauss are x, y, z.
  */
 inline TelemetryFrame buildTelemetry(uint16_t seq,
                                      bool pmuOk, bool gnssOk, bool imuOk, bool magOk, bool bmeOk,
                                      double latDeg, double lonDeg, float gpsAltM, float hdop,
                                      float pressurePa,
-                                     int battPct,
+                                     uint16_t battMv,
                                      float tempC, float humidityPct,
                                      const float accelMps2[3], const float gyroDps[3], const float magGauss[3]) {
   TelemetryFrame f = {};
@@ -132,7 +132,7 @@ inline TelemetryFrame buildTelemetry(uint16_t seq,
 
   f.pressurePa = pressurePa;
 
-  f.battPct = battPct;
+  f.battMv = battMv;
 
   f.tempC       = tempC;
   f.humidityPct = humidityPct;
