@@ -41,11 +41,12 @@
  *
  * ---------------------------------------------------------------- BENCH
  *   Serial monitor at 115200. Each TELEMETRY sent prints a few lines.
- *   The charge LED flashes once per TELEMETRY sent (~140 ms, the time on air).
- *   It no longer shows charging status.
- *   The Heltec (bench/heltec_rx) stands in for the DDS.
- *   USB serial stops while the ESP32 light-sleeps, so the monitor may drop
- *   or miss prints during SLEEP. That's expected.
+ *   The charge LED is steady on in SLEEP, and in TRANSMIT flashes once per
+ *   TELEMETRY sent (~140 ms, the time on air). It no longer shows charging status.
+ *   The Heltec (bench/heltec_rx) stands in for the DDS, or type a command
+ *   letter in the monitor: w = WAKE, s = SLEEP, r = RESTART, b = CHECK_BATTERY.
+ *   On USB power the DCM skips light sleep (it loops awake in SLEEP), so the
+ *   monitor stays connected. Measure sleep current on battery only.
  *
  * ---------------------------------------------------------------- PROTOCOL
  *   ../shared/protocol.h: radio settings, frames, buildTelemetry().
@@ -168,7 +169,8 @@ void SetTransmitMode(){
   delay(250);
   IMUBegin();
   MagBegin();
-  BMEBegin(); 
+  BMEBegin();
+  if (pmuUp) power.setChargingLedMode(XPOWERS_CHG_LED_OFF);   // TX flashes only from here on
   state = TRANSMIT;
   return;
 }
@@ -177,6 +179,7 @@ void SetSleepMode(){
   power.disableALDO1();
   power.disableALDO2();
   GPSEnable(false);
+  if (pmuUp) power.setChargingLedMode(XPOWERS_CHG_LED_ON);    // steady on = asleep
   state = SLEEP;
   return;
 }
@@ -318,6 +321,25 @@ uint8_t ReadPacket(){
   return 0;
 }
 
+/** Bench only: a letter typed in the serial monitor (w, s, r, b) stands in for a DDS command. */
+uint8_t ReadSerial(){
+  if (!Serial.available()) { return 0; }
+  switch (Serial.read()) {
+    case 'w': return mapds::kMsgWake;
+    case 's': return mapds::kMsgSleep;
+    case 'r': return mapds::kMsgRestart;
+    case 'b': return mapds::kMsgCheckBattery;
+  }
+  return 0;   // anything else, including the newline
+}
+
+/** A command from the radio, or failing that from the serial monitor. 0 = none. */
+uint8_t ReadCommand(){
+  uint8_t msg = ReadPacket();
+  if (msg == 0) { msg = ReadSerial(); }
+  return msg;
+}
+
 /**
  * Prints one frame to the serial monitor as it goes over the air.
  * Safe with no laptop attached: USB serial drops writes when no host is connected.
@@ -365,7 +387,7 @@ void CheckBattery(){
 
 void Transmit(){
   // Every pass, not just once a second: notice a SLEEP or RESTART right away
-  uint8_t msg = ReadPacket();
+  uint8_t msg = ReadCommand();
   if (msg == mapds::kMsgRestart) {
     Restart();
   }
@@ -412,9 +434,12 @@ void Transmit(){
   tLastSend = millis();
 }
 void Sleep(){
-  Serial.flush();             // let pending prints finish before the CPU stops
-  esp_light_sleep_start();    // stops here until DIO1 goes high (packet arrived)
-  uint8_t msg = ReadPacket();
+  // On USB power (the bench) stay awake, so the serial monitor can send commands
+  if (!(pmuUp && power.isVbusIn())) {
+    Serial.flush();             // let pending prints finish before the CPU stops
+    esp_light_sleep_start();    // stops here until DIO1 goes high (packet arrived)
+  }
+  uint8_t msg = ReadCommand();
   if (msg == mapds::kMsgRestart) {
     Restart();
   }
