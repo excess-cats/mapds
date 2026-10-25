@@ -18,7 +18,7 @@
  *
  * ---------------------------------------------------------------- INPUTS
  *   Switches (levels: stay on until turned off)  Load, Arm, Deploy
- *   Commands (one-shot: cleared on every state change)  END/SLEEP, ACKNOWLEDGE FAILURE
+ *   Commands (one-shot: cleared on every state change)  END/SLEEP, ACKNOWLEDGE FAILURE, CHECK BATTERY
  *   Limit switch                                  CLOSED = drone present, OPEN = gone
  *   Software fault                                computed from telemetry (below)
  *
@@ -26,6 +26,8 @@
  *   Deploy would re-arm and re-fire straight out of Standby.
  *   Deploy only counts if it is turned on after the Armed light: ARMED turns it off until then.
  *   Clearing END/ACK on every state change means one pressed in another state can't fire later.
+ *   CHECK BATTERY only counts in LOAD and STANDBY (DCM asleep): send CHECK_BATTERY, and the
+ *   DCM replies with battery-only TELEMETRY that updates dcmBattPct.
  *
  * ---------------------------------------------------------------- FSM
  *   STANDBY ------(Load on)---------> LOAD
@@ -191,9 +193,10 @@ enum State  {
 
 // Commands to the DCM. The values are the protocol's message IDs, so Transmit() can put them straight in the header.
 enum class Command : uint8_t {
-    WAKE    = mapds::kMsgWake,
-    SLEEP   = mapds::kMsgSleep,
-    RESTART = mapds::kMsgRestart
+    WAKE          = mapds::kMsgWake,
+    SLEEP         = mapds::kMsgSleep,
+    RESTART       = mapds::kMsgRestart,
+    CHECK_BATTERY = mapds::kMsgCheckBattery
 };
 
 State state = STANDBY;
@@ -204,7 +207,7 @@ bool servoUp = false;
 bool     limitRaw      = false;   // last raw switch reading, before debounce
 uint32_t tLimitChanged = 0;       // millis() when limitRaw last changed
 bool radioUp = false;        // RadioBegin() succeeded; if false, never arm (no telemetry possible)
-uint16_t cmdSeq = 0;         // command counter (header.seq on WAKE/SLEEP/RESTART)
+uint16_t cmdSeq = 0;         // command counter (header.seq on WAKE/SLEEP/RESTART/CHECK_BATTERY)
 uint16_t lastSeq = 0;        // seq of the last valid frame, set by ReadPacket()
 int missCounter = 0;         // gaps in seq, counted by ReadPacket()
 uint32_t tMissWindow = 0;    // millis() when the missCounter window started
@@ -236,6 +239,7 @@ float    lastSnr     = 0;    // dB
 bool LoadCommand = false;
 bool ArmCommand = false;
 bool DeployCommand = false;
+bool CheckBatteryCommand = false;
 bool EndCommand = false;    
 bool AckCommand = false;    
 bool ArmedStatus = false;       // Armed light: ARMED and the 15 s are up (Deploy allowed)
@@ -273,7 +277,7 @@ void UpdateState(State to){
     Serial.printf("%s -> %s\n", StateName(state), StateName(to));
     state = to;
     TimeStateEntered = millis();
-    EndCommand = AckCommand = false;   // one-shot commands only count in the state they're pressed in
+    EndCommand = AckCommand = CheckBatteryCommand = false;   // one-shot commands only count in the state they're pressed in
 }
 
 bool StateChange(State to){
@@ -313,14 +317,24 @@ bool StateChange(State to){
     return false;
 }
 
+/** CHECK BATTERY button: asks the sleeping DCM for its battery level. One-shot, so clear it once sent. */
+void CheckBattery(){
+    if (!CheckBatteryCommand) return;
+    CheckBatteryCommand = false;
+    Serial.println("  [send CHECK_BATTERY]");
+    Transmit(Command::CHECK_BATTERY);
+}
+
 // STATES
 void Load(){
     servo.WritePosEx(kServoId, LOAD_POS, kServoSpeed, kServoAcc);
+    CheckBattery();
     if (!LoadCommand && LimitClosed) StateChange(STANDBY);
 }
 
 void Standby(){
     servo.WritePosEx(kServoId, LOCK_POS, kServoSpeed, kServoAcc);
+    CheckBattery();
 
     if (LoadCommand) StateChange(LOAD);
 

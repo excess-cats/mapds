@@ -19,10 +19,11 @@ constexpr uint8_t  kSyncWord         = 0x12;
 constexpr uint16_t kPreamble         = 16;    // symbols
 
 // ---- Message IDs (header byte 0) ----
-constexpr uint8_t kMsgTelemetry = 1;  // DCM -> DDS
-constexpr uint8_t kMsgWake      = 2;  // DDS -> DCM
-constexpr uint8_t kMsgSleep     = 3;  // DDS -> DCM
-constexpr uint8_t kMsgRestart   = 4;  // DDS -> DCM
+constexpr uint8_t kMsgTelemetry    = 1;  // DCM -> DDS
+constexpr uint8_t kMsgWake         = 2;  // DDS -> DCM
+constexpr uint8_t kMsgSleep        = 3;  // DDS -> DCM
+constexpr uint8_t kMsgRestart      = 4;  // DDS -> DCM
+constexpr uint8_t kMsgCheckBattery = 5;  // DDS -> DCM
 
 // ---- Frames ----
 // Packed, so the struct's bytes are exactly the wire bytes (little-endian,
@@ -35,7 +36,7 @@ struct __attribute__((packed)) Header {
   uint16_t seq;     // restarts at 0 every DCM boot
 };
 
-// WAKE, SLEEP and RESTART are a bare Header.
+// WAKE, SLEEP, RESTART and CHECK_BATTERY are a bare Header.
 
 struct __attribute__((packed)) TelemetryFrame {
   Header  header;
@@ -94,6 +95,11 @@ inline Header buildSleep(uint16_t seq) {
 /** RESTART: DDS -> DCM. The DCM reboots and comes back asleep. */
 inline Header buildRestart(uint16_t seq) {
   return buildHeader(kMsgRestart, seq);
+}
+
+/** CHECK_BATTERY: DDS -> DCM. */
+inline Header buildCheckBattery(uint16_t seq) {
+  return buildHeader(kMsgCheckBattery, seq);
 }
 
 /**

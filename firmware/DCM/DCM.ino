@@ -11,7 +11,9 @@
  *      Any other packet is ignored and the DCM goes back to sleep.
  *   4. TELEMETRY at 1 Hz. Between sends, listen for SLEEP (Class A).
  *   5. A valid RESTART (asleep or streaming) reboots the ESP32, which comes back asleep.
- *   6. Low battery: the AXP2101 PMU cuts power at its shutdown voltage.
+ *   6. A valid CHECK_BATTERY while asleep sends a few battery-only TELEMETRY frames
+ *      (sensor ok flags off), then goes back to sleep.
+ *   7. Low battery: the AXP2101 PMU cuts power at its shutdown voltage.
  *
  *   Requirement: about 4 h of streaming per charge; charged between missions.
  *   A reset mid-flight (brownout, crash) comes back asleep, so the DDS must
@@ -20,6 +22,7 @@
  * ---------------------------------------------------------------- FSM
  *   boot -----------------------> SLEEP
  *   SLEEP ----(our WAKE)--------> TRANSMIT   [sensors + GPS on, re-init them]
+ *   SLEEP ----(our CHECK_BATTERY)> SLEEP     [send battery TELEMETRY x3, sensors stay off]
  *   SLEEP ----(any other packet)> SLEEP      [back to light sleep]
  *   TRANSMIT -(1 s elapsed)-----> TRANSMIT   [read sensors, send TELEMETRY]
  *   TRANSMIT -(our SLEEP)-------> SLEEP      [sensors + GPS off]
@@ -115,6 +118,8 @@ constexpr float    kTcxoVolts         = 1.8f;
 constexpr uint16_t kPmuShutdownMv     = 3000;  // check against the 18650's datasheet
 constexpr uint32_t kFixMaxAgeMs       = 2000;  // older than this = no fix
 constexpr uint32_t kGpsBaud           = 9600;
+constexpr int      kBatteryCopies     = 3;     // CHECK_BATTERY replies; extras in case one is lost
+constexpr uint32_t kBatteryGapMs      = 200;   // between copies, so the DDS reads one before the next lands
 
 enum State { TRANSMIT, SLEEP }; 
 State state;
@@ -291,7 +296,7 @@ void RadioBegin(){
   radio.startReceive();
 }
 /**
- * Checks the radio for a command. Returns mapds::kMsgWake, kMsgSleep or kMsgRestart
+ * Checks the radio for a command. Returns mapds::kMsgWake, kMsgSleep, kMsgRestart or kMsgCheckBattery
  * if one of ours arrived, or 0 for nothing, junk, or someone else's packet.
  * Only the first call after a packet arrives sees it: reading clears it.
  */
@@ -308,7 +313,8 @@ uint8_t ReadPacket(){
   mapds::Header h;
   memcpy(&h, buf, sizeof(h));
   if (h.pairId != mapds::kPairId) { return 0; }       // not our DDS
-  if (h.msg == mapds::kMsgWake || h.msg == mapds::kMsgSleep || h.msg == mapds::kMsgRestart) { return h.msg; }
+  if (h.msg == mapds::kMsgWake || h.msg == mapds::kMsgSleep || h.msg == mapds::kMsgRestart ||
+      h.msg == mapds::kMsgCheckBattery) { return h.msg; }
   return 0;
 }
 
@@ -336,6 +342,25 @@ void Restart(){
   Serial.flush();
   SetSleepMode();   // sensors + GPS off, same as a fresh boot
   ESP.restart();
+}
+void CheckBattery(){
+  Serial.println("CHECK_BATTERY received");
+  if (!radioUp) { return; }
+
+  float zeros[3] = {0, 0, 0};
+  for (int i = 0; i < kBatteryCopies; i++) {
+    int battPct = pmuUp ? power.getBatteryPercent() : -1;
+    mapds::TelemetryFrame frame = mapds::buildTelemetry(seq, pmuUp, false, false, false, false, 0, 0, 0, 0, 0, battPct, 0, 0, zeros, zeros, zeros);
+    PrintFrame(frame);
+
+    int16_t radio_status = radio.transmit(reinterpret_cast<uint8_t*>(&frame), sizeof(frame));
+    if (radio_status != RADIOLIB_ERR_NONE) {
+      Serial.printf("TX failed (%d)\n", radio_status);
+    }
+    seq+=1;
+    delay(kBatteryGapMs);
+  }
+  radio.startReceive();   // transmit() leaves the radio deaf; listen for WAKE again
 }
 
 void Transmit(){
@@ -396,6 +421,9 @@ void Sleep(){
   if (msg == mapds::kMsgWake) {
     Serial.println("WAKE received");
     SetTransmitMode();
+  }
+  if (msg == mapds::kMsgCheckBattery){
+    CheckBattery();
   }
   // anything else: return, and the next loop() sleeps again
 }
