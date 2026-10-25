@@ -435,7 +435,7 @@ void Transmit(){
 }
 void Sleep(){
   // On USB power (the bench) stay awake, so the serial monitor can send commands
-  if (!(pmuUp && power.isVbusIn())) {
+  if (!(pmuUp && power.isVbusGood())) {
     Serial.flush();             // let pending prints finish before the CPU stops
     esp_light_sleep_start();    // stops here until DIO1 goes high (packet arrived)
   }
