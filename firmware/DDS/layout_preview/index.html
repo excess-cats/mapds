@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MAPDS Layout Preview</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="simulator.js" defer></script>
+  <script src="preview.js" defer></script>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-battery" viewBox="0 0 32 20"><rect x="1" y="2" width="26" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M29 7v6" stroke="currentColor" stroke-width="3"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 10a8 8 0 1 0-1 7M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-open" viewBox="0 0 24 24"><path d="M8 4H4v16h16v-4M12 4h8v8M20 4 10 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19 15.5A8 8 0 0 1 8.5 5 8.5 8.5 0 1 0 19 15.5Z"/></symbol>
+</svg>
+<div class="cockpit">
+  <header class="topbar">
+    <button id="nvgButton" class="nvg-button" type="button" aria-pressed="false" aria-label="Toggle night vision" title="Night vision"><svg class="icon"><use id="visionIcon" href="#i-moon"/></svg></button>
+    <nav class="tabs" role="tablist" aria-label="Display view">
+      <button id="groundTab" role="tab" aria-selected="true" aria-controls="groundView" tabindex="0" type="button">Ground Display</button>
+      <button id="flightTab" role="tab" aria-selected="false" aria-controls="flightView" tabindex="-1" type="button">Flight Display</button>
+    </nav>
+  </header>
+
+  <section class="battery-row" aria-label="Battery indicators">
+    <div class="battery-cell"><span class="eyebrow battery-title">DDS BATTERY</span><strong id="ddsBattery" class="battery-percent">--<span>%</span></strong><svg class="battery-graphic" aria-hidden="true" viewBox="0 0 32 20"><use href="#i-battery"/><rect id="ddsFill" x="5" y="6" width="0" height="8"/><path class="battery-dividers" d="M9.5 5v10M14 5v10M18.5 5v10"/></svg></div>
+    <div class="battery-cell"><span class="eyebrow battery-title">DCM BATTERY</span><strong id="dcmBattery" class="battery-percent">--<span>%</span></strong><button id="refreshButton" class="framed-button refresh-button" type="button" aria-label="Refresh DCM battery" title="Refresh DCM battery"><svg class="icon"><use href="#i-refresh"/></svg></button><svg class="battery-graphic" aria-hidden="true" viewBox="0 0 32 20"><use href="#i-battery"/><rect id="dcmFill" x="5" y="6" width="0" height="8"/><path class="battery-dividers" d="M9.5 5v10M14 5v10M18.5 5v10"/></svg></div>
+  </section>
+
+  <main class="display-area">
+    <section id="groundView" class="ground-grid" role="tabpanel" aria-labelledby="groundTab">
+      <button id="lockSwitch" disabled class="cell control-cell ground-lock" type="button" role="switch" aria-checked="false" aria-label="Unlock DDS"><span class="toggle-track" aria-hidden="true"><span class="toggle-handle"></span></span><strong id="lockText" class="control-label">NOT AVAILABLE</strong></button>
+      <div id="presenceCell" class="cell presence-cell" data-attached="false"><span class="eyebrow">PRESENCE</span><div class="presence-reading" aria-live="polite"><span id="attachmentDot" class="indicator-dot"></span><strong id="attachmentText">NOT AVAILABLE</strong></div></div>
+      <div class="cell state-cell ground-state" data-state="OFFLINE"><span class="eyebrow">SYSTEM STATE</span><strong class="state-name" data-state-name>OFFLINE</strong><span class="arm-countdown" data-arm-countdown hidden></span></div>
+    </section>
+
+    <section id="flightView" class="flight-grid" role="tabpanel" aria-labelledby="flightTab" hidden>
+      <button id="armSwitch" disabled class="cell control-cell flight-arm" type="button" role="switch" aria-checked="false" aria-label="ARM input"><span class="toggle-track" aria-hidden="true"><span class="toggle-handle"></span></span><strong id="armText" class="control-label">ARM</strong></button>
+      <button id="deploySwitch" disabled class="cell control-cell flight-deploy" type="button" role="switch" aria-checked="false" aria-label="DEPLOY input"><span class="toggle-track" aria-hidden="true"><span class="toggle-handle"></span></span><strong id="deployText" class="control-label">DEPLOY</strong></button>
+      <div class="cell state-cell flight-state" data-state="OFFLINE"><span class="eyebrow">SYSTEM STATE</span><strong class="state-name" data-state-name>OFFLINE</strong><span class="arm-countdown" data-arm-countdown hidden></span><div class="state-actions"><button id="endSleepButton" class="framed-button" type="button" disabled>END / SLEEP</button><button id="ackButton" class="framed-button" type="button" hidden>ACKNOWLEDGE FAILURE</button></div></div>
+      <div class="cell gps-cell"><div class="cell-heading"><span class="eyebrow">GPS</span><button id="telemetryButton" class="framed-button" type="button">Telemetry<svg class="icon"><use href="#i-open"/></svg></button></div><div class="gps-grid"><div><span>Latitude</span><strong id="latitudeValue">NOT AVAILABLE</strong></div><div><span>Longitude</span><strong id="longitudeValue">NOT AVAILABLE</strong></div><div><span>Altitude</span><strong id="altitudeValue">NOT AVAILABLE</strong></div><div><span>Last GPS update</span><strong id="gpsAge" title="Age of the last received telemetry with valid GPS; the receiver fix timestamp is not in the packet.">NOT AVAILABLE</strong></div></div></div>
+    </section>
+  </main>
+
+  <footer class="log-panel"><div class="log-heading"><span class="eyebrow">SYSTEM LOG</span><button id="scenarioButton" class="framed-button" type="button">Scenarios</button><button id="historyButton" class="framed-button" type="button">Open log<svg class="icon"><use href="#i-open"/></svg></button></div><div id="recentLog" class="recent-log" aria-live="polite" aria-relevant="additions"></div></footer>
+</div>
+
+<dialog id="historyDialog" class="history-dialog" aria-labelledby="historyTitle"><div class="dialog-heading"><h2 id="historyTitle">Session log</h2><button class="close-button" data-close="historyDialog" type="button" aria-label="Close session log"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="history-layout"><div id="historyList" class="history-list"></div><article class="message-detail"><span id="detailLevel" class="eyebrow">MESSAGE DETAILS</span><h3 id="detailTitle">Select a message</h3><time id="detailTime"></time><p id="detailBody"></p></article></div></dialog>
+
+<dialog id="telemetryDialog" class="telemetry-dialog" aria-labelledby="telemetryTitle"><div class="dialog-heading"><h2 id="telemetryTitle">Telemetry</h2><button class="close-button" data-close="telemetryDialog" type="button" aria-label="Close telemetry"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="telemetry-body"><table><tbody><tr><th>DDS battery voltage</th><td id="ddsVoltage">NOT AVAILABLE</td></tr><tr><th>DCM battery voltage</th><td id="dcmVoltage">NOT AVAILABLE</td></tr><tr><th>Power system</th><td id="pmuValue">NOT AVAILABLE</td></tr><tr><th>GPS fix</th><td id="fixValue">NOT AVAILABLE</td></tr><tr><th>Motion sensor</th><td id="imuValue">NOT AVAILABLE</td></tr><tr><th>Compass</th><td id="magHealthValue">NOT AVAILABLE</td></tr><tr><th>Environmental sensor</th><td id="bmeValue">NOT AVAILABLE</td></tr><tr><th>Temperature</th><td id="temperatureValue">NOT AVAILABLE</td></tr><tr><th>Humidity</th><td id="humidityValue">NOT AVAILABLE</td></tr><tr><th>Pressure</th><td id="pressureValue">NOT AVAILABLE</td></tr><tr><th>Acceleration X / Y / Z</th><td id="accelValue">NOT AVAILABLE</td></tr><tr><th>Angular rate X / Y / Z</th><td id="gyroValue">NOT AVAILABLE</td></tr><tr><th>Magnetic field X / Y / Z</th><td id="magValue">NOT AVAILABLE</td></tr><tr><th>Signal strength</th><td id="rssiValue">NOT AVAILABLE</td></tr><tr><th>Signal-to-noise ratio</th><td id="snrValue">NOT AVAILABLE</td></tr><tr><th>Last packet received</th><td id="packetAgeValue">NOT AVAILABLE</td></tr><tr><th>Packet number</th><td id="packetNumberValue">NOT AVAILABLE</td></tr></tbody></table></div></dialog>
+<dialog id="scenarioDialog" aria-labelledby="scenarioTitle"><div class="dialog-heading"><h2 id="scenarioTitle">Preview scenarios</h2><button class="close-button" type="button" data-close="scenarioDialog" aria-label="Close scenarios">Close</button></div><div class="scenario-body"><p>Local simulation only. No Heltec connection or hardware commands.</p><div class="scenario-buttons"><button type="button" class="framed-button" data-scenario="reset">Reset preview</button><button type="button" class="framed-button" data-scenario="empty">Standby / empty</button><button type="button" class="framed-button" data-scenario="loading">Loading / unattached</button><button type="button" class="framed-button" data-scenario="attached">Loading / attached</button><button type="button" class="framed-button" data-scenario="loaded">Standby / attached</button><button type="button" class="framed-button" data-scenario="arming">Arming / 15 s wait</button><button type="button" class="framed-button" data-scenario="ready">Armed / ready</button><button type="button" class="framed-button" data-scenario="deploying">Deploying</button><button type="button" class="framed-button" data-scenario="deployError">Deploy error / recovery</button><button type="button" class="framed-button" data-scenario="recovered">Recovery succeeded</button><button type="button" class="framed-button" data-scenario="deployFailure">Deploy failure</button><button type="button" class="framed-button" data-scenario="deployed">Deployed</button><button type="button" class="framed-button" data-scenario="softwareError">Software error</button><button type="button" class="framed-button" data-scenario="missing">No DCM packets</button><button type="button" class="framed-button" data-scenario="stale">DCM updates stopped</button><button type="button" class="framed-button" data-scenario="gpsMissing">No GPS fix</button><button type="button" class="framed-button" data-scenario="lowBattery">Low batteries</button><button type="button" class="framed-button" data-scenario="batteryOnly">Battery-only reply</button><button type="button" class="framed-button" data-scenario="offline">DDS disconnected</button></div><h3>Simulation controls</h3><div class="scenario-buttons"><button type="button" class="framed-button" id="presenceTest">Toggle attachment</button><button type="button" class="framed-button" id="releaseTest">Release drone</button><button type="button" class="framed-button" id="jamTest">Deployment: normal</button><button type="button" class="framed-button" id="pauseTest">Pause simulation</button></div><p id="scenarioDescription" aria-live="polite">Standby with no drone attached.</p></div></dialog>
+</body>
+</html>

@@ -18,7 +18,7 @@
  *
  * ---------------------------------------------------------------- INPUTS
  *   Switches (levels: stay on until turned off)  Load, Arm, Deploy
- *   Commands (one-shot: cleared on every state change)  END/SLEEP, ACKNOWLEDGE FAILURE, CHECK BATTERY
+ *   Commands (one-shot: cleared on every state change)  END/SLEEP, ACKNOWLEDGE FAILURE
  *   Limit switch                                  CLOSED = drone present, OPEN = gone
  *   Software fault                                computed from telemetry (below)
  *
@@ -26,8 +26,6 @@
  *   Deploy would re-arm and re-fire straight out of Standby.
  *   Deploy only counts if it is turned on after the Armed light: ARMED turns it off until then.
  *   Clearing END/ACK on every state change means one pressed in another state can't fire later.
- *   CHECK BATTERY only counts in LOAD and STANDBY (DCM asleep): send CHECK_BATTERY, and the
- *   DCM replies with battery-only TELEMETRY that updates dcmBattMv and dcmBattPct.
  *
  * ---------------------------------------------------------------- FSM
  *   STANDBY ------(Load on)---------> LOAD
@@ -54,7 +52,7 @@
  *   Error light    SOFTWARE_ERROR, DEPLOY_ERROR, DEPLOY_FAILURE
  *   Status         DEPLOYED = success, DEPLOY_FAILURE = failure
  *   DDS battery    ddsBatteryMv, the Heltec's own LiPo
- *   Warnings       no GPS fix (gnssOk false), DCM battery < 20 % (dcmBattPct -1 = on USB, no warning)
+ *   Warnings       no GPS fix (gnssOk false), DCM battery < 20 % (battPct -1 = on USB, no warning)
  *                  Shown only. They never cause a transition.
  *
  * ---------------------------------------------------------------- SOFTWARE FAULT (checked in ARMED only, once the 15 s are up)
@@ -124,6 +122,9 @@
 #include <SPI.h>
 #include <RadioLib.h>   // SX1262
 #include <SCServo.h>    // Feetech ST3215 bus servo (SMS_STS class)
+#include <WiFi.h>
+#include <WebServer.h> // bundled with the ESP32 board package
+#include "web_assets.h"
 
 #include "../shared/protocol.h"
 
@@ -152,8 +153,6 @@ constexpr int      kAdcCtrlOn   = HIGH;   // V3.4: HIGH confirmed on the bench; 
 constexpr int8_t   kTxPowerDbm  = 14;     // bench value; flight value TBD
 constexpr float    kTcxoVolts   = 1.8f;
 constexpr uint32_t kLimitDebounceMs = 20; // switch must hold a level this long before it counts
-constexpr uint16_t kDcmBattEmptyMv  = 3200; // DCM 18650: 0 %. Little charge left below this (PMU cuts at 3000)
-constexpr uint16_t kDcmBattFullMv   = 4200; // DCM 18650: 100 %
 
 // SERVO SETTINGS
 
@@ -162,9 +161,9 @@ constexpr uint8_t  kServoId     = 1;      // factory default
 
 // Servo positions: 0-4095 = 360 deg, 2047 = centre.
 // VALUES SUBJECT TO CHANGE 
-constexpr int16_t  LOAD_POS     = 2047;   // hook open, drone can be hooked on
-constexpr int16_t  LOCK_POS     = 0;   // hook closed, drone held
-constexpr int16_t  RELEASE_POS  = 2047;   // hook open, drone falls free
+constexpr int16_t  LOAD_POS     = 0;   // hook open, drone can be hooked on
+constexpr int16_t  LOCK_POS     = 2047;   // hook closed, drone held
+constexpr int16_t  RELEASE_POS  = 0;   // hook open, drone falls free
 constexpr uint16_t kServoSpeed  = 1500;   // steps/s (50 ~ 0.73 RPM, max ~3073)
 constexpr uint8_t  kServoAcc    = 50;     // 0-150, lower = gentler (unit undocumented)
 constexpr int16_t  kJiggleDistance = 100;   // distance each side of RELEASE_POS, TBD
@@ -195,9 +194,9 @@ enum State  {
 
 // Commands to the DCM. The values are the protocol's message IDs, so Transmit() can put them straight in the header.
 enum class Command : uint8_t {
-    WAKE          = mapds::kMsgWake,
-    SLEEP         = mapds::kMsgSleep,
-    RESTART       = mapds::kMsgRestart,
+    WAKE    = mapds::kMsgWake,
+    SLEEP   = mapds::kMsgSleep,
+    RESTART = mapds::kMsgRestart,
     CHECK_BATTERY = mapds::kMsgCheckBattery
 };
 
@@ -209,7 +208,7 @@ bool servoUp = false;
 bool     limitRaw      = false;   // last raw switch reading, before debounce
 uint32_t tLimitChanged = 0;       // millis() when limitRaw last changed
 bool radioUp = false;        // RadioBegin() succeeded; if false, never arm (no telemetry possible)
-uint16_t cmdSeq = 0;         // command counter (header.seq on WAKE/SLEEP/RESTART/CHECK_BATTERY)
+uint16_t cmdSeq = 0;         // command counter (header.seq on WAKE/SLEEP/RESTART)
 uint16_t lastSeq = 0;        // seq of the last valid frame, set by ReadPacket()
 int missCounter = 0;         // gaps in seq, counted by ReadPacket()
 uint32_t tMissWindow = 0;    // millis() when the missCounter window started
@@ -228,8 +227,7 @@ double   dcmLonDeg      = 0;
 float    dcmGpsAltM     = 0;       // m above sea level
 float    dcmHdop        = 0;       // lower is better (~1 good, >5 poor)
 float    dcmPressurePa  = 0;
-uint16_t dcmBattMv      = 0;       // mV, or 0 with no battery
-int8_t   dcmBattPct     = -1;      // 0-100, or -1 with no battery. From dcmBattMv, by UpdateDcmBattPct()
+uint16_t dcmBattMv      = 0;       // battery voltage from the current protocol, 0 = unavailable
 float    dcmTempC       = 0;
 float    dcmHumidityPct = 0;
 float    dcmAccelMps2[3] = {};     // x, y, z
@@ -242,7 +240,6 @@ float    lastSnr     = 0;    // dB
 bool LoadCommand = false;
 bool ArmCommand = false;
 bool DeployCommand = false;
-bool CheckBatteryCommand = false;
 bool EndCommand = false;    
 bool AckCommand = false;    
 bool ArmedStatus = false;       // Armed light: ARMED and the 15 s are up (Deploy allowed)
@@ -255,6 +252,16 @@ uint32_t ddsBatteryMv = 0;      // DDS LiPo voltage, read every loop
 bool LimitClosed = false;     // true = drone present. Debounced, updated by ReadLimitSwitch() every loop
 
 // END: GLOBALS USED IN INTERFACE
+
+
+
+// BEGIN: Web connection settings.
+constexpr char kDdsWifiSsid[] = "DDI_MAPDS";
+constexpr char kDdsWifiPassword[] = "12345678";
+WebServer cockpitServer(80);
+bool webServerUp = false, webHasTelemetry = false, webResetPending = false;
+uint32_t tWebResetRequested = 0;
+// END: Web connection settings.
 
 
 
@@ -280,7 +287,7 @@ void UpdateState(State to){
     Serial.printf("%s -> %s\n", StateName(state), StateName(to));
     state = to;
     TimeStateEntered = millis();
-    EndCommand = AckCommand = CheckBatteryCommand = false;   // one-shot commands only count in the state they're pressed in
+    EndCommand = AckCommand = false;   // one-shot commands only count in the state they're pressed in
 }
 
 bool StateChange(State to){
@@ -320,24 +327,14 @@ bool StateChange(State to){
     return false;
 }
 
-/** CHECK BATTERY button: asks the sleeping DCM for its battery level. One-shot, so clear it once sent. */
-void CheckBattery(){
-    if (!CheckBatteryCommand) return;
-    CheckBatteryCommand = false;
-    Serial.println("  [send CHECK_BATTERY]");
-    Transmit(Command::CHECK_BATTERY);
-}
-
 // STATES
 void Load(){
     servo.WritePosEx(kServoId, LOAD_POS, kServoSpeed, kServoAcc);
-    CheckBattery();
     if (!LoadCommand && LimitClosed) StateChange(STANDBY);
 }
 
 void Standby(){
     servo.WritePosEx(kServoId, LOCK_POS, kServoSpeed, kServoAcc);
-    CheckBattery();
 
     if (LoadCommand) StateChange(LOAD);
 
@@ -453,13 +450,6 @@ uint32_t ReadBatteryMv(){
     return analogReadMilliVolts(VBAT_PIN) * 49 / 10;   // undo the 390k/100k divider (x4.9)
 }
 
-/** Sets dcmBattPct from dcmBattMv: a straight line from kDcmBattEmptyMv (0 %) to kDcmBattFullMv (100 %). */
-void UpdateDcmBattPct(){
-    if (dcmBattMv == 0) { dcmBattPct = -1; return; }   // no battery (on USB)
-    int32_t pct = (int32_t(dcmBattMv) - kDcmBattEmptyMv) * 100 / (kDcmBattFullMv - kDcmBattEmptyMv);
-    dcmBattPct = constrain(pct, 0, 100);
-}
-
 /** Debounced read of the limit switch into LimitClosed. Call every loop. */
 void ReadLimitSwitch(){
     bool raw = digitalRead(LIMIT_PIN) == LOW;          // LOW = CLOSED = drone present
@@ -551,7 +541,6 @@ int32_t ReadPacket(){
         dcmGyroDps[i]   = f.gyroDps[i];
         dcmMagGauss[i]  = f.magGauss[i];
     }
-    UpdateDcmBattPct();
     if (f.header.seq != lastSeq + 1) missCounter++;
     lastSeq = f.header.seq;
     tLastPacket = millis();
@@ -559,11 +548,107 @@ int32_t ReadPacket(){
     lastSnr     = snr;
     return f.header.seq;
 }
+// -------------------------- WEB VARIABLE BRIDGE --------------------------
+
+// Single-cell 3.7 V LiPo indication, interpolated between voltage points.
+// Tune these bridge-only points against the installed batteries after measurements.
+// Cell voltage range reference: learn.adafruit.com/li-ion-and-lipoly-batteries/voltages
+int WebBatteryPercent(uint32_t mv){
+    if (mv < 2500 || mv > 4350) return -1; // no usable battery reading
+    static const uint16_t volts[] = {3000,3300,3500,3600,3700,3750,3800,3850,3900,3950,4000,4100,4200};
+    static const uint8_t percent[] = {0,2,5,10,20,30,40,50,60,70,80,90,100};
+    if (mv <= volts[0]) return 0;
+    for (unsigned int i = 1; i < sizeof(volts)/sizeof(volts[0]); ++i) {
+        if (mv <= volts[i]) return percent[i-1] + ((mv-volts[i-1])*(percent[i]-percent[i-1]) + (volts[i]-volts[i-1])/2)/(volts[i]-volts[i-1]);
+    }
+    return 100;
+}
+
+void WebFlag(String& json, const char* key, bool value){
+    json += ",\""; json += key; json += "\":"; json += value ? "true" : "false";
+}
+void WebNumber(String& json, const char* key, double value, unsigned int digits){
+    json += ",\""; json += key; json += "\":";
+    json += isfinite(value) ? String(value, digits) : String("null");
+}
+void WebVector(String& json, const char* key, const float values[3]){
+    json += ",\""; json += key; json += "\":[";
+    for (int i = 0; i < 3; ++i) { if (i) json += ','; json += isfinite(values[i]) ? String(values[i], 3) : String("null"); }
+    json += ']';
+}
+void CockpitStatus(){
+    String json; json.reserve(2400);
+    json = "{\"state\":\""; json += StateName(state); json += "\"";
+    WebFlag(json, "dcmPresent", LimitClosed); WebFlag(json, "servoUp", servoUp); WebFlag(json, "radioUp", radioUp);
+    WebNumber(json, "ddsBatteryPct", WebBatteryPercent(ddsBatteryMv), 0);
+    WebNumber(json, "ddsBatteryMv", ddsBatteryMv, 0); WebNumber(json, "stateAgeMs", millis() - TimeStateEntered, 0);
+    WebNumber(json, "missCounter", missCounter, 0);
+    json += ",\"limits\":{\"armDelayMs\":"; json += String(kArmDelayMs);
+    WebNumber(json, "noPacketMs", kNoPacketMs, 0); WebNumber(json, "maxMissed", kMaxMissed, 0);
+    WebNumber(json, "softwareErrorMs", kSoftwareErrorMs, 0); json += '}';
+    json += ",\"inputs\":{\"LoadCommand\":"; json += LoadCommand ? "true" : "false";
+    WebFlag(json, "ArmCommand", ArmCommand); WebFlag(json, "DeployCommand", DeployCommand); json += '}';
+    json += ",\"indicators\":{\"ArmedStatus\":"; json += ArmedStatus ? "true" : "false";
+    WebFlag(json, "ErrorStatus", ErrorStatus); WebFlag(json, "DeployStatus", DeployStatus); WebFlag(json, "DeployFailStatus", DeployFailStatus); json += '}';
+    json += ",\"telemetry\":{\"hasTelemetry\":"; json += webHasTelemetry ? "true" : "false";
+    WebNumber(json, "ageMs", millis() - tLastPacket, 0); WebNumber(json, "lastTelemetrySeq", lastSeq, 0);
+    WebFlag(json, "dcmPmuOk", dcmPmuOk); WebFlag(json, "dcmGnssOk", dcmGnssOk);
+    WebFlag(json, "dcmImuOk", dcmImuOk); WebFlag(json, "dcmMagOk", dcmMagOk); WebFlag(json, "dcmBmeOk", dcmBmeOk);
+    WebNumber(json, "dcmLatDeg", dcmLatDeg, 7); WebNumber(json, "dcmLonDeg", dcmLonDeg, 7);
+    WebNumber(json, "dcmGpsAltM", dcmGpsAltM, 1); WebNumber(json, "dcmHdop", dcmHdop, 2);
+    WebNumber(json, "dcmBattMv", dcmBattMv, 0); WebNumber(json, "dcmBattPct", webHasTelemetry && dcmPmuOk ? WebBatteryPercent(dcmBattMv) : -1, 0); WebNumber(json, "dcmTempC", dcmTempC, 1);
+    WebNumber(json, "dcmHumidityPct", dcmHumidityPct, 1); WebNumber(json, "dcmPressurePa", dcmPressurePa, 1);
+    WebVector(json, "dcmAccelMps2", dcmAccelMps2); WebVector(json, "dcmGyroDps", dcmGyroDps); WebVector(json, "dcmMagGauss", dcmMagGauss);
+    WebNumber(json, "lastRssi", lastRssi, 1); WebNumber(json, "lastSnr", lastSnr, 1); json += "}}";
+    cockpitServer.sendHeader("Cache-Control", "no-store"); cockpitServer.send(200, "application/json", json);
+}
+void CockpitCommand(){
+    const String command = cockpitServer.arg("command"), value = cockpitServer.arg("value");
+    bool* input = command == "LOAD" ? &LoadCommand : command == "ARM" ? &ArmCommand : command == "DEPLOY" ? &DeployCommand : nullptr;
+    if (input && (value == "true" || value == "false")) *input = value == "true";
+    else if (command == "CHECK_BATTERY") {
+        const bool request = state == STANDBY || state == LOAD;
+        if (request && !Transmit(Command::CHECK_BATTERY)) { cockpitServer.send(503, "application/json", "{\"ok\":false,\"message\":\"Battery request could not be transmitted.\"}"); return; }
+        cockpitServer.send(202, "application/json", request ? "{\"ok\":true,\"requested\":true}" : "{\"ok\":true,\"requested\":false}"); return;
+    }
+    else if (command == "END") EndCommand = true; // existing Deployed() handles it
+    else if (command == "ACK") AckCommand = true; // existing DeployFailure() handles it
+    else { cockpitServer.send(400, "application/json", "{\"ok\":false,\"message\":\"Unknown command or missing ON/OFF value.\"}"); return; }
+    cockpitServer.send(202, "application/json", "{\"ok\":true}");
+}
+void CockpitReset(){
+    if (cockpitServer.arg("confirmed") != "true") { cockpitServer.send(400, "application/json", "{\"ok\":false}"); return; }
+    cockpitServer.send(202, "application/json", "{\"ok\":true}");
+    tWebResetRequested = millis(); webResetPending = true;
+}
+void StartCockpitServer(){
+    WiFi.mode(WIFI_AP);
+    if (!WiFi.softAP(kDdsWifiSsid, kDdsWifiPassword)) { Serial.println("DDS Wi-Fi failed to start."); return; }
+    cockpitServer.on("/", HTTP_GET, [](){ cockpitServer.sendHeader("Cache-Control", "no-store"); cockpitServer.send_P(200, "text/html; charset=utf-8", WEB_MAIN_HTML); });
+    cockpitServer.on("/main.html", HTTP_GET, [](){ cockpitServer.sendHeader("Cache-Control", "no-store"); cockpitServer.send_P(200, "text/html; charset=utf-8", WEB_MAIN_HTML); });
+    cockpitServer.on("/cockpit_style.css", HTTP_GET, [](){ cockpitServer.sendHeader("Cache-Control", "no-store"); cockpitServer.send_P(200, "text/css; charset=utf-8", WEB_COCKPIT_CSS); });
+    cockpitServer.on("/interface_logic.js", HTTP_GET, [](){ cockpitServer.sendHeader("Cache-Control", "no-store"); cockpitServer.send_P(200, "application/javascript; charset=utf-8", WEB_INTERFACE_JS); });
+    cockpitServer.on("/api/status", HTTP_GET, CockpitStatus);
+    cockpitServer.on("/api/command", HTTP_POST, CockpitCommand);
+    cockpitServer.on("/api/reset", HTTP_POST, CockpitReset);
+    cockpitServer.enableDelay(false); cockpitServer.begin(); webServerUp = true;
+    Serial.print("DDS Wi-Fi: "); Serial.println(kDdsWifiSsid);
+    Serial.print("Cockpit address: http://"); Serial.println(WiFi.softAPIP());
+}
+void ServiceCockpit(){
+    if (tLastPacket != 0) webHasTelemetry = true; 
+    if (webResetPending) { if (millis() - tWebResetRequested >= 750) ESP.restart(); return; }
+    // Regular WebServer still has synchronous socket waits. Defer it during the timed jiggle.
+    if (webServerUp && state != DEPLOY_ERROR) cockpitServer.handleClient();
+}
+// ------------------------ END WEB VARIABLE BRIDGE ------------------------
+
 void setup() {
     PowerOn();
     Serial.begin(115200);
     radioUp = RadioBegin();
     servoUp = ServoBegin();
+    StartCockpitServer();
 }
 
 void loop() {
@@ -581,4 +666,5 @@ void loop() {
         case DEPLOYED:       Deployed();      break;
         case DEPLOY_FAILURE: DeployFailure(); break;
     }
+    ServiceCockpit();
 }
