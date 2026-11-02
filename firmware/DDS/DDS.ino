@@ -10,14 +10,14 @@
  * and read the state and lights. Until then, the serial monitor stands in.
  *
  * ---------------------------------------------------------------- STATES
- *   LOAD, STANDBY, ARMED, SOFTWARE_ERROR,
+ *   UNLOCK, LOCKING, STANDBY, ARMED, SOFTWARE_ERROR,
  *   DEPLOYING, DEPLOYED, DEPLOY_ERROR, DEPLOY_FAILURE
  *
  *   Boot in STANDBY. FSM v3's NOT_LOADED is cut: STANDBY with the limit switch OPEN
  *   covers it (no arming without a drone).
  *
  * ---------------------------------------------------------------- INPUTS
- *   Switches (levels: stay on until turned off)  Load, Arm, Deploy
+ *   Switches (levels: stay on until turned off)  Unlock (LOCK/UNLOCK toggle, on = unlock), Arm, Deploy
  *   Commands (one-shot: cleared on every state change)  END/SLEEP, ACKNOWLEDGE FAILURE, CHECK BATTERY
  *   Limit switch                                  CLOSED = drone present, OPEN = gone
  *   Software fault                                computed from telemetry (below)
@@ -26,12 +26,14 @@
  *   Deploy would re-arm and re-fire straight out of Standby.
  *   Deploy only counts if it is turned on after the Armed light: ARMED turns it off until then.
  *   Clearing END/ACK on every state change means one pressed in another state can't fire later.
- *   CHECK BATTERY only counts in LOAD and STANDBY (DCM asleep): send CHECK_BATTERY, and the
+ *   CHECK BATTERY only counts in UNLOCK and STANDBY (DCM asleep): send CHECK_BATTERY, and the
  *   DCM replies with battery-only TELEMETRY that updates dcmBattMv and dcmBattPct.
  *
  * ---------------------------------------------------------------- FSM
- *   STANDBY ------(Load on)---------> LOAD
- *   LOAD ---------(Load off)--------> STANDBY
+ *   STANDBY ------(Unlock on)-------> UNLOCK
+ *   UNLOCK -------(Unlock off, limit CLOSED)> LOCKING  [servo -> LOCK_POS]
+ *   LOCKING ------(settled, in range)> STANDBY
+ *   LOCKING ------(settled, out of range or no reply)> UNLOCK   [Unlock back on, LockFailStatus]
  *   STANDBY ------(Arm on, limit CLOSED, radio up)> ARMED   [send WAKE, start 15 s timer]
  *   ARMED --------(Arm off)---------> STANDBY          [send SLEEP]
  *   ARMED --------(software fault)--> SOFTWARE_ERROR   [send RESTART, start 1 min timer]
@@ -46,6 +48,8 @@
  *   DEPLOY_FAILURE (ACK)------------> STANDBY          [send SLEEP, switches off]
  *
  *   Ignore any input that has no arrow out of the current state (e.g. Deploy in STANDBY).
+ *   LOCKING always finishes its check: the limit switch or Unlock changing during it is ignored.
+ *   A failed lock turns Unlock back on, so it doesn't retry by itself: the operator turns it off to try again.
  *   DEPLOYED -> STANDBY lands with the limit switch OPEN, so Arm is refused until a drone is loaded.
  *   Every timer is "time since the transition that started it": save millis() once, on the arrow.
  *
@@ -53,6 +57,7 @@
  *   Armed light    ARMED and the 15 s timer is up (that is also when Deploy is allowed)
  *   Error light    SOFTWARE_ERROR, DEPLOY_ERROR, DEPLOY_FAILURE
  *   Status         DEPLOYED = success, DEPLOY_FAILURE = failure
+ *   Lock failed    LockFailStatus: set when LOCKING fails, cleared by the next good lock
  *   DDS battery    ddsBatteryMv, the Heltec's own LiPo
  *   Warnings       no GPS fix (gnssOk false), DCM battery < 20 % (dcmBattPct -1 = on USB, no warning)
  *                  Shown only. They never cause a transition.
@@ -74,7 +79,8 @@
  *             st.WritePosEx(id, position, speed, acc)   move (returns at once; the servo moves on its own)
  *             st.Ping(id)                                -1 = no reply (check at boot)
  *             st.ReadPos(id)                             current position (useful for the jiggle)
- *   LOAD_POS, LOCK_POS, RELEASE_POS: TBD on the bench.
+ *   UNLOCK_POS, LOCK_POS, RELEASE_POS: TBD on the bench.
+ *   Lock check: kLockSettleMs after entering LOCKING, ReadPos must be within kLockTolerance of LOCK_POS.
  *   Jiggle: 3 small moves either side of RELEASE_POS (~ +/-100 counts, TBD), then back to RELEASE_POS.
  *
  * ---------------------------------------------------------------- SERIAL (115200)
@@ -162,7 +168,7 @@ constexpr uint8_t  kServoId     = 1;      // factory default
 
 // Servo positions: 0-4095 = 360 deg, 2047 = centre.
 // VALUES SUBJECT TO CHANGE 
-constexpr int16_t  LOAD_POS     = 2047;   // hook open, drone can be hooked on
+constexpr int16_t  UNLOCK_POS   = 2047;   // hook open, drone can be hooked on
 constexpr int16_t  LOCK_POS     = 0;   // hook closed, drone held
 constexpr int16_t  RELEASE_POS  = 2047;   // hook open, drone falls free
 constexpr uint16_t kServoSpeed  = 1500;   // steps/s (50 ~ 0.73 RPM, max ~3073)
@@ -170,12 +176,14 @@ constexpr uint8_t  kServoAcc    = 50;     // 0-150, lower = gentler (unit undocu
 constexpr int16_t  kJiggleDistance = 100;   // distance each side of RELEASE_POS, TBD
 constexpr int      kJiggleTimes  = 3;
 constexpr uint32_t kJiggleStepMs = 200;   // time allowed per move before the next one, TBD
+constexpr int16_t  kLockTolerance = 50;   // LOCKING: ReadPos must be within this many counts of LOCK_POS, TBD
 
 // END SERVO SETTINGS
 
 // FSM TIMING
 
-constexpr uint32_t kArmDelayMs       = 15000;   // ARMED: no faults or Deploy until this is up, then the Armed light
+constexpr uint32_t kLockSettleMs     = 2000;    // LOCKING: wait this long for the servo, then read its position, TBD
+constexpr uint32_t kArmDelayMs      = 15000;   // ARMED: no faults or Deploy until this is up, then the Armed light
 constexpr uint32_t kNoPacketMs       = 10000;   // ARMED: no telemetry for this long = fault
 constexpr uint32_t kMissWindowMs     = 10000;   // ARMED: missCounter restarts every window
 constexpr int      kMaxMissed        = 3;       // ARMED: more than this many misses in one window = fault
@@ -183,7 +191,8 @@ constexpr uint32_t kSoftwareErrorMs  = 60000;   // SOFTWARE_ERROR: wait this lon
 constexpr uint32_t kDeployTimeoutMs  = 10000;   // DEPLOYING: limit still CLOSED after this = DEPLOY_ERROR
 
 enum State  {
-    LOAD,
+    UNLOCK,
+    LOCKING,
     STANDBY,
     ARMED,
     SOFTWARE_ERROR,
@@ -239,7 +248,7 @@ uint32_t tLastPacket = 0;    // millis() when the last valid frame arrived
 float    lastRssi    = 0;    // dBm, of the last valid frame
 float    lastSnr     = 0;    // dB
 
-bool LoadCommand = false;
+bool UnlockCommand = false;     // LOCK/UNLOCK toggle: true = unlock
 bool ArmCommand = false;
 bool DeployCommand = false;
 bool CheckBatteryCommand = false;
@@ -249,6 +258,7 @@ bool ArmedStatus = false;       // Armed light: ARMED and the 15 s are up (Deplo
 bool ErrorStatus = false;       // Error light: SOFTWARE_ERROR, DEPLOY_ERROR, DEPLOY_FAILURE
 bool DeployStatus = false;      // status: DEPLOYED (success)
 bool DeployFailStatus = false;  // status: DEPLOY_FAILURE
+bool LockFailStatus = false;    // LOCKING failed; cleared by the next good lock
 
 uint32_t ddsBatteryMv = 0;      // DDS LiPo voltage, read every loop
 
@@ -263,7 +273,8 @@ bool LimitClosed = false;     // true = drone present. Debounced, updated by Rea
 /** Name of a state, for serial prints. */
 const char* StateName(State s){
     switch(s){
-        case LOAD:           return "LOAD";
+        case UNLOCK:         return "UNLOCK";
+        case LOCKING:        return "LOCKING";
         case STANDBY:        return "STANDBY";
         case ARMED:          return "ARMED";
         case SOFTWARE_ERROR: return "SOFTWARE_ERROR";
@@ -287,11 +298,15 @@ bool StateChange(State to){
     State from = state;
     switch(from){
         case STANDBY:
-            if(to == LOAD)       { UpdateState(to); Serial.println("  [servo -> LOAD_POS]"); return true; }
+            if(to == UNLOCK)     { UpdateState(to); Serial.println("  [servo -> UNLOCK_POS]"); return true; }
             if(to == ARMED)    { UpdateState(to); Serial.println("  [send WAKE]"); Transmit(Command::WAKE); return true; }
             break;
-        case LOAD:
-            if(to == STANDBY)    { UpdateState(to); Serial.println("  [servo -> LOCK_POS]"); return true; }
+        case UNLOCK:
+            if(to == LOCKING)    { UpdateState(to); Serial.println("  [servo -> LOCK_POS]"); return true; }
+            break;
+        case LOCKING:
+            if(to == STANDBY)    { UpdateState(to); return true; }
+            if(to == UNLOCK)     { UpdateState(to); Serial.println("  [servo -> UNLOCK_POS]"); return true; }
             break;
         case ARMED:
             if(to == STANDBY)        { UpdateState(to); Serial.println("  [send SLEEP]"); Transmit(Command::SLEEP); return true; }
@@ -329,17 +344,34 @@ void CheckBattery(){
 }
 
 // STATES
-void Load(){
-    servo.WritePosEx(kServoId, LOAD_POS, kServoSpeed, kServoAcc);
+void Unlock(){
+    servo.WritePosEx(kServoId, UNLOCK_POS, kServoSpeed, kServoAcc);
     CheckBattery();
-    if (!LoadCommand && LimitClosed) StateChange(STANDBY);
+    if (!UnlockCommand && LimitClosed) StateChange(LOCKING);
+}
+
+void Locking(){
+    // exits: settle time up, in range -> STANDBY; out of range or no reply -> UNLOCK
+    servo.WritePosEx(kServoId, LOCK_POS, kServoSpeed, kServoAcc);
+    if (millis() - TimeStateEntered < kLockSettleMs) return;
+
+    int pos = servo.ReadPos(kServoId);   // -1 = no reply
+    if (pos != -1 && abs(pos - LOCK_POS) <= kLockTolerance) {
+        LockFailStatus = false;
+        StateChange(STANDBY);
+    } else {
+        Serial.printf("  [lock failed: pos %d]\n", pos);
+        LockFailStatus = true;
+        UnlockCommand = true;            // toggle back to UNLOCK, so it doesn't retry by itself
+        StateChange(UNLOCK);
+    }
 }
 
 void Standby(){
     servo.WritePosEx(kServoId, LOCK_POS, kServoSpeed, kServoAcc);
     CheckBattery();
 
-    if (LoadCommand) StateChange(LOAD);
+    if (UnlockCommand) StateChange(UNLOCK);
 
     else if (ArmCommand && LimitClosed && radioUp) StateChange(ARMED);   // no radio = no telemetry: never arm
 
@@ -416,7 +448,7 @@ void Deployed(){
     // exits: END/SLEEP -> STANDBY
     DeployStatus = true;
     if (EndCommand) {                                        // cleared by UpdateState()
-        LoadCommand = ArmCommand = DeployCommand = false;    // switches off, so STANDBY doesn't re-arm and re-fire
+        UnlockCommand = ArmCommand = DeployCommand = false;    // switches off, so STANDBY doesn't re-arm and re-fire
         DeployStatus = false;
         StateChange(STANDBY);
     }
@@ -427,7 +459,7 @@ void DeployFailure(){
     DeployFailStatus = true;
     ErrorStatus = true;
     if (AckCommand) {                                        // cleared by UpdateState()
-        LoadCommand = ArmCommand = DeployCommand = false;    // switches off, so STANDBY doesn't re-arm and re-fire
+        UnlockCommand = ArmCommand = DeployCommand = false;    // switches off, so STANDBY doesn't re-arm and re-fire
         DeployFailStatus = false;
         ErrorStatus = false;
         StateChange(STANDBY);
@@ -572,7 +604,8 @@ void loop() {
     ddsBatteryMv = ReadBatteryMv();
 
     switch(state){
-        case LOAD:           Load();          break;
+        case UNLOCK:         Unlock();        break;
+        case LOCKING:        Locking();       break;
         case STANDBY:        Standby();       break;
         case ARMED:          Armed();         break;
         case SOFTWARE_ERROR: SoftwareError(); break;
