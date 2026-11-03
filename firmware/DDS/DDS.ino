@@ -550,20 +550,57 @@ int32_t ReadPacket(){
 }
 // -------------------------- WEB VARIABLE BRIDGE --------------------------
 
-// Single-cell 3.7 V LiPo indication, interpolated between voltage points.
-// Tune these bridge-only points against the installed batteries after measurements.
-// Cell voltage range reference: learn.adafruit.com/li-ion-and-lipoly-batteries/voltages
-int WebBatteryPercent(uint32_t mv){
-    if (mv < 2500 || mv > 4350) return -1; // no usable battery reading
-    static const uint16_t volts[] = {3000,3300,3500,3600,3700,3750,3800,3850,3900,3950,4000,4100,4200};
-    static const uint8_t percent[] = {0,2,5,10,20,30,40,50,60,70,80,90,100};
-    if (mv <= volts[0]) return 0;
-    for (unsigned int i = 1; i < sizeof(volts)/sizeof(volts[0]); ++i) {
-        if (mv <= volts[i]) return percent[i-1] + ((mv-volts[i-1])*(percent[i]-percent[i-1]) + (volts[i]-volts[i-1])/2)/(volts[i]-volts[i-1]);
+// ---------------------------------------------------------------- BATTERY DISPLAY
+// DDS: keep the existing single-cell 3.7 V LiPo conversion.
+// DCM: ZEUS PCIFR18650-1500, one 3.2 V / 1500 mAh LiFePO4 cell.
+// These percentages are for the cockpit only. They never drive the FSM or PMU.
+// DCM sends millivolts, not remaining capacity or remaining flight time.
+//
+// ZEUS specifies 3.65 +/- 0.03 V charge and 2.0 V discharge cutoff:
+// www.zeusbatteryproducts.com/wp-content/uploads/downloads/ZEUS_LIFEPO4_PCIFR18650-1500_SPEC_SHEET.pdf
+// It does not publish a voltage/SOC table. The DCM points below are an initial
+// LiFePO4 approximation using TI SLUAAR1, Tables 2-1/2-2 and Figure 2-3:
+// www.ti.com/lit/an/sluaar1/sluaar1.pdf
+// Rounded reference points are NOT measurements of this ZEUS cell. Load,
+// temperature and charging shift the reading, especially on its flat plateau.
+// Check against a measured discharge run; replace this profile when DCM's cell changes.
+// The DCM currently sets system power-down to 3.0 V. That is a separate hardware
+// setting, not the cell's 2.0 V cutoff; this bridge changes neither setting.
+
+// Find the two surrounding voltage points, then interpolate a whole percent.
+// Bounded table walk only: no sensor queries, UART reads, radio waits or delays.
+int WebBatteryInterpolate(uint32_t mv, const uint16_t* volts,
+                          const uint8_t* percent, unsigned int count){
+    if (mv <= volts[0]) return percent[0];
+    for (unsigned int i = 1; i < count; ++i) {
+        if (mv > volts[i]) continue;
+        const uint32_t spanMv = volts[i] - volts[i - 1];
+        const uint32_t risePct = percent[i] - percent[i - 1];
+        const uint32_t offsetMv = mv - volts[i - 1];
+        return percent[i - 1] + (offsetMv * risePct + spanMv / 2) / spanMv;
     }
-    return 100;
+    return percent[count - 1];
 }
 
+int WebBatteryPercent(uint32_t mv){
+    if (mv < 2500 || mv > 4350) return -1; // DDS: no usable reading
+    static const uint16_t volts[] = {3000,3300,3500,3600,3700,3750,3800,3850,3900,3950,4000,4100,4200};
+    static const uint8_t percent[] = {0,2,5,10,20,30,40,50,60,70,80,90,100};
+    return WebBatteryInterpolate(mv, volts, percent, sizeof(volts) / sizeof(volts[0]));
+}
+
+int WebDcmBatteryPercent(uint32_t mv){
+    // Zero means absent. Above 3.70 V is outside this cell profile (including
+    // a small measurement margin); show unavailable instead of a false 100%.
+    if (mv == 0 || mv > 3700) return -1;
+    static const uint16_t volts[] = {2000,3000,3096,3197,3263,3297,3330,3393,3503,3576,3612,3650};
+    static const uint8_t percent[] = {0,3,7,13,31,59,80,88,93,97,98,100};
+    return WebBatteryInterpolate(mv, volts, percent, sizeof(volts) / sizeof(volts[0]));
+}
+
+// ---------------------------------------------------------------- JSON HELPERS
+// Append cached values to the status response. Non-finite numbers become null.
+// These helpers format data only; they do not run a check or contact the DCM.
 void WebFlag(String& json, const char* key, bool value){
     json += ",\""; json += key; json += "\":"; json += value ? "true" : "false";
 }
@@ -576,37 +613,53 @@ void WebVector(String& json, const char* key, const float values[3]){
     for (int i = 0; i < 3; ++i) { if (i) json += ','; json += isfinite(values[i]) ? String(values[i], 3) : String("null"); }
     json += ']';
 }
+// ---------------------------------------------------------------- STATUS REQUEST
+// Snapshot the existing FSM, lever inputs and indicators for the browser.
+// State names come directly from the automation; the website does not invent them.
 void CockpitStatus(){
+    // Reserve once for this response to reduce String reallocations.
     String json; json.reserve(2400);
     json = "{\"state\":\""; json += StateName(state); json += "\"";
     WebFlag(json, "dcmPresent", LimitClosed); WebFlag(json, "servoUp", servoUp); WebFlag(json, "radioUp", radioUp);
+    // Heltec battery stays on its own LiPo profile.
     WebNumber(json, "ddsBatteryPct", WebBatteryPercent(ddsBatteryMv), 0);
     WebNumber(json, "ddsBatteryMv", ddsBatteryMv, 0); WebNumber(json, "stateAgeMs", millis() - TimeStateEntered, 0);
     WebNumber(json, "missCounter", missCounter, 0);
+    // Send the firmware timer settings; the browser uses them for the countdown.
     json += ",\"limits\":{\"armDelayMs\":"; json += String(kArmDelayMs);
     WebNumber(json, "noPacketMs", kNoPacketMs, 0); WebNumber(json, "maxMissed", kMaxMissed, 0);
     WebNumber(json, "softwareErrorMs", kSoftwareErrorMs, 0); json += '}';
+    // Raw operator inputs and firmware indicators are separate from FSM state.
     json += ",\"inputs\":{\"LoadCommand\":"; json += LoadCommand ? "true" : "false";
     WebFlag(json, "ArmCommand", ArmCommand); WebFlag(json, "DeployCommand", DeployCommand); json += '}';
     json += ",\"indicators\":{\"ArmedStatus\":"; json += ArmedStatus ? "true" : "false";
     WebFlag(json, "ErrorStatus", ErrorStatus); WebFlag(json, "DeployStatus", DeployStatus); WebFlag(json, "DeployFailStatus", DeployFailStatus); json += '}';
+    // Last received packet only. A status request does not wake or poll the DCM.
     json += ",\"telemetry\":{\"hasTelemetry\":"; json += webHasTelemetry ? "true" : "false";
     WebNumber(json, "ageMs", millis() - tLastPacket, 0); WebNumber(json, "lastTelemetrySeq", lastSeq, 0);
     WebFlag(json, "dcmPmuOk", dcmPmuOk); WebFlag(json, "dcmGnssOk", dcmGnssOk);
     WebFlag(json, "dcmImuOk", dcmImuOk); WebFlag(json, "dcmMagOk", dcmMagOk); WebFlag(json, "dcmBmeOk", dcmBmeOk);
     WebNumber(json, "dcmLatDeg", dcmLatDeg, 7); WebNumber(json, "dcmLonDeg", dcmLonDeg, 7);
     WebNumber(json, "dcmGpsAltM", dcmGpsAltM, 1); WebNumber(json, "dcmHdop", dcmHdop, 2);
-    WebNumber(json, "dcmBattMv", dcmBattMv, 0); WebNumber(json, "dcmBattPct", webHasTelemetry && dcmPmuOk ? WebBatteryPercent(dcmBattMv) : -1, 0); WebNumber(json, "dcmTempC", dcmTempC, 1);
+    // Keep raw millivolts available in telemetry; only the display percent is estimated.
+    WebNumber(json, "dcmBattMv", dcmBattMv, 0);
+    WebNumber(json, "dcmBattPct", webHasTelemetry && dcmPmuOk ? WebDcmBatteryPercent(dcmBattMv) : -1, 0);
+    WebNumber(json, "dcmTempC", dcmTempC, 1);
     WebNumber(json, "dcmHumidityPct", dcmHumidityPct, 1); WebNumber(json, "dcmPressurePa", dcmPressurePa, 1);
     WebVector(json, "dcmAccelMps2", dcmAccelMps2); WebVector(json, "dcmGyroDps", dcmGyroDps); WebVector(json, "dcmMagGauss", dcmMagGauss);
     WebNumber(json, "lastRssi", lastRssi, 1); WebNumber(json, "lastSnr", lastSnr, 1); json += "}}";
     cockpitServer.sendHeader("Cache-Control", "no-store"); cockpitServer.send(200, "application/json", json);
 }
+// ---------------------------------------------------------------- OPERATOR INPUT
+// Set the existing command variables. The FSM decides the resulting action.
+// No servo positions, arming rules or state transitions are implemented here.
 void CockpitCommand(){
     const String command = cockpitServer.arg("command"), value = cockpitServer.arg("value");
     bool* input = command == "LOAD" ? &LoadCommand : command == "ARM" ? &ArmCommand : command == "DEPLOY" ? &DeployCommand : nullptr;
     if (input && (value == "true" || value == "false")) *input = value == "true";
     else if (command == "CHECK_BATTERY") {
+        // Sleeping DCM: request its existing battery-only reply.
+        // Active operation: use normal incoming telemetry rather than interrupt it.
         const bool request = state == STANDBY || state == LOAD;
         if (request && !Transmit(Command::CHECK_BATTERY)) { cockpitServer.send(503, "application/json", "{\"ok\":false,\"message\":\"Battery request could not be transmitted.\"}"); return; }
         cockpitServer.send(202, "application/json", request ? "{\"ok\":true,\"requested\":true}" : "{\"ok\":true,\"requested\":false}"); return;
@@ -616,11 +669,14 @@ void CockpitCommand(){
     else { cockpitServer.send(400, "application/json", "{\"ok\":false,\"message\":\"Unknown command or missing ON/OFF value.\"}"); return; }
     cockpitServer.send(202, "application/json", "{\"ok\":true}");
 }
+// Reply first, then let ServiceCockpit restart after the response interval.
 void CockpitReset(){
     if (cockpitServer.arg("confirmed") != "true") { cockpitServer.send(400, "application/json", "{\"ok\":false}"); return; }
     cockpitServer.send(202, "application/json", "{\"ok\":true}");
     tWebResetRequested = millis(); webResetPending = true;
 }
+// ---------------------------------------------------------------- WEB STARTUP
+// Host our own Wi-Fi and serve the compiled HTML/CSS/JS stored in web_assets.h.
 void StartCockpitServer(){
     WiFi.mode(WIFI_AP);
     if (!WiFi.softAP(kDdsWifiSsid, kDdsWifiPassword)) { Serial.println("DDS Wi-Fi failed to start."); return; }
@@ -635,6 +691,9 @@ void StartCockpitServer(){
     Serial.print("DDS Wi-Fi: "); Serial.println(kDdsWifiSsid);
     Serial.print("Cockpit address: http://"); Serial.println(WiFi.softAPIP());
 }
+// ---------------------------------------------------------------- LOOP SERVICE
+// Observe the packet timestamp already set by ReadPacket(); never read it again.
+// Timer checks do not wait, but the regular WebServer still has socket waits.
 void ServiceCockpit(){
     if (tLastPacket != 0) webHasTelemetry = true; 
     if (webResetPending) { if (millis() - tWebResetRequested >= 750) ESP.restart(); return; }

@@ -28,17 +28,17 @@ button:disabled { cursor: default; opacity: .55; }
 .battery-title { position: absolute; left: 18px; top: 12px; }
 .battery-percent { font-size: clamp(38px,5vw,64px); font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
 .battery-percent > span { font-size: .55em; margin-left: 3px; }
-.battery-graphic { position: absolute; right: 18px; top: 50%; width: 52px; height: 34px; transform: translateY(-35%); color: var(--green); fill: currentColor; }
+.battery-graphic { position: absolute; right: 18px; top: 50%; width: clamp(42px,6vw,80px); height: clamp(28px,4vw,50px); transform: translateY(-35%); color: var(--green); fill: currentColor; }
 .framed-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--muted); border-radius: 3px; background: transparent; font-size: 12px; font-weight: 600; }
 .framed-button .icon { width: 16px; height: 16px; }
 .framed-button:hover:not(:disabled), .close-button:hover { background: var(--bar); }
-.refresh-button { position: absolute; right: 84px; top: 50%; transform: translateY(-35%); width: 36px; height: 34px; padding: 6px; }
-.refresh-button .icon { width: 22px; height: 22px; }
+.refresh-button { position: absolute; right: calc(30px + clamp(42px,6vw,80px)); top: 50%; transform: translateY(-35%); width: clamp(34px,4vw,50px); height: clamp(34px,4vw,50px); padding: 6px; }
+.refresh-button .icon { width: 100%; height: 100%; }
 .refresh-button[data-busy=true] .icon { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .display-area { min-height: 0; }
 .ground-grid, .flight-grid { height: 100%; display: grid; min-height: 0; }
-.ground-grid { grid-template-columns: 2fr 1fr; grid-template-rows: 1fr 1.3fr; }
+.ground-grid { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1.3fr; }
 .flight-grid { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1.3fr; }
 .cell { position: relative; padding: clamp(12px,2vw,28px); border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); min-width: 0; min-height: 0; overflow: auto; }
 .ground-state { grid-column: 1/-1; }
@@ -48,7 +48,7 @@ button:disabled { cursor: default; opacity: .55; }
 .control-cell[aria-checked=true] { background: #cfe4ff; color: #15232b; }
 .flight-arm[aria-checked=true] { background: #fff7a1; }
 .flight-deploy[aria-checked=true] { background: #fe7070; }
-.toggle-track { display: block; width: clamp(110px,14vw,180px); height: clamp(48px,6vw,74px); padding: 6px; border: 3px solid currentColor; border-radius: 50px; }
+.toggle-track { display: block; width: clamp(130px,20vw,280px); height: clamp(58px,8vw,112px); padding: 6px; border: 3px solid currentColor; border-radius: 50px; }
 .toggle-handle { display: block; height: 100%; aspect-ratio: 1; border-radius: 50%; background: currentColor; }
 .control-cell[aria-checked=true] .toggle-handle { margin-left: auto; }
 .control-label { font-size: clamp(23px,3.7vw,48px); font-weight: 650; line-height: 1.1; }
@@ -115,13 +115,13 @@ html[data-vision=nvg] .presence-cell[data-attached=true] .eyebrow { color: var(-
   .topbar { --nvg-width:43px; }
   .battery-title { left:10px; top:10px; }
   .battery-percent { font-size:40px; }
-  .battery-graphic { width:30px; height:22px; right:10px; }
-  .refresh-button { right:45px; width:28px; height:28px; padding:4px; }
-  .refresh-button .icon { width:18px; height:18px; }
+  .battery-graphic { width:36px; height:24px; right:10px; }
+  .refresh-button { right:54px; width:32px; height:32px; padding:4px; }
+  .refresh-button .icon { width:100%; height:100%; }
   .battery-cell { padding-top:17px; }
   .cell { padding:12px; }
-  .ground-grid { grid-template-columns:2fr 1fr; }
-  .toggle-track { width:100px; height:46px; padding:5px; border-width:2px; }
+  .ground-grid { grid-template-columns:1fr 1fr; }
+  .toggle-track { width:clamp(100px,25vw,160px); height:clamp(46px,11vw,70px); padding:5px; border-width:2px; }
   .control-label { font-size:24px; }
   .presence-cell .eyebrow, .state-cell .eyebrow { left:12px; top:12px; }
   .presence-reading { gap:6px; flex-direction:column; }
@@ -165,3 +165,23 @@ html[data-vision=nvg] .presence-cell[data-attached=true] .eyebrow { color: var(-
 .scenario-buttons button[aria-pressed=true] { border-color:var(--green); color:var(--green); }
 
 .arm-countdown { margin-top:12px; font-size:clamp(12px,1.5vw,20px); text-align:center; line-height:1.4; }
+
+/* Deployment is a confirmed action, not a maintained visual switch. */
+.flight-arm .control-label { font-size:clamp(18px,3vw,42px); text-align:center; }
+.deploy-button { background:#b8d5c1; color:#19382a; box-shadow:inset 0 0 0 3px #799e87; gap:12px; }
+.deploy-icon { width:clamp(48px,7vw,100px); height:clamp(48px,7vw,100px); }
+.deploy-button[data-state="DEPLOYING"] { background:#fff7a1; color:#15232b; }
+.deploy-button[data-state="DEPLOYED"] { background:#c3f7c8; color:#15232b; opacity:1; }
+html[data-vision=nvg] .deploy-button { background:#14271d; color:var(--green); box-shadow:inset 0 0 0 3px #385943; }
+html[data-vision=nvg] .deploy-button[data-state="DEPLOYING"] { background:#292719; color:var(--amber); }
+html[data-vision=nvg] .deploy-button[data-state="DEPLOYED"] { background:#10251b; color:var(--green); }
+.deploy-confirm-body { padding:20px; }
+.deploy-confirm-actions { display:flex; justify-content:flex-end; gap:12px; margin-top:24px; }
+.confirm-deploy { background:#b8d5c1; color:#19382a; padding:12px 22px; }
+html[data-vision=nvg] .confirm-deploy { background:#14271d; color:var(--green); }
+
+/* Battery percentage and icon share the same charge-level colors. */
+.battery-percent[data-level="unknown"] { color:var(--muted); }
+.battery-percent[data-level="fault"] { color:var(--red); }
+.battery-percent[data-level="warning"] { color:var(--amber); }
+.battery-percent[data-level="good"] { color:var(--green); }

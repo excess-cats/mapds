@@ -1,5 +1,5 @@
 "use strict";
-// Live webpage only. The DDS FSM owns all transitions and physical actions.
+// Live webpage only. The Drone Deployment System FSM owns all transitions and physical actions.
 // API status contains raw inputs, indicators and telemetry; POSTs set existing inputs.
 const $ = selector => document.querySelector(selector);
 const POLL_MS=1000, LINK_TIMEOUT_MS=3500, TELEMETRY_FRESH_MS=3500, REQUEST_TIMEOUT_MS=2500;
@@ -42,7 +42,8 @@ function renderBattery(prefix,percentage){
  const text=$('#'+prefix+'Battery');text.replaceChildren(document.createTextNode(valid?String(Math.round(percentage)):'--'));
  const unit=document.createElement('span');unit.textContent='%';text.appendChild(unit);
  const fill=$('#'+prefix+'Fill');fill.setAttribute('width',valid?String(18*percentage/100):'0');
- fill.parentElement.dataset.level=!valid?'unknown':percentage<=15?'fault':percentage<=20?'warning':'good';
+ const level=!valid?'unknown':percentage<=20?'fault':percentage<=35?'warning':'good';
+ text.dataset.level=level;fill.parentElement.dataset.level=level;
 }
 function renderTelemetry(t){
  $('#ddsVoltage').textContent=numberText(connected()&&snapshot.ddsBatteryMv>0?snapshot.ddsBatteryMv/1000:null,'V',2);
@@ -59,9 +60,9 @@ function renderTelemetry(t){
  $('#gyroValue').textContent=vectorText(t.dcmImuOk===true?t.dcmGyroDps:null,'\u00b0/s');
  $('#magValue').textContent=vectorText(t.dcmMagOk===true?t.dcmMagGauss:null,'G');
  $('#rssiValue').textContent=numberText(t.lastRssi,'dBm');$('#snrValue').textContent=numberText(t.lastSnr,'dB');
- $('#packetAgeValue').textContent=connected()?(ageMs()===null?'NO PACKETS YET':ageText(ageMs())):'DDS DISCONNECTED';
+ $('#packetAgeValue').textContent=connected()?(ageMs()===null?'NO PACKETS YET':ageText(ageMs())):'Drone Deployment System DISCONNECTED';
  $('#packetNumberValue').textContent=connected()&&battery?.hasTelemetry===true&&Number.isFinite(battery.lastTelemetrySeq)?String(battery.lastTelemetrySeq):'NOT AVAILABLE';
- $('#packetNumberValue').title='Sequence number reported by the DCM; it may restart or wrap. This is not a total received-packet count.';
+ $('#packetNumberValue').title='Sequence number reported by the Drone Communication Module; it may restart or wrap. This is not a total received-packet count.';
 }
 function render(){
  const online=connected(),state=online?snapshot.state:'OFFLINE';setDisplayedState(state);
@@ -73,18 +74,19 @@ function render(){
  });
  for(const [command,key] of Object.entries(INPUTS)){
   const value=online&&typeof snapshot.inputs?.[key]==='boolean'?snapshot.inputs[key]:null;
-  const button=$('#'+BUTTONS[command]);button.setAttribute('aria-checked',String(value===true));
-  button.disabled=value===null||commandBusy||Boolean(pendingInput)||Boolean(pendingRefresh);
+  const button=$('#'+BUTTONS[command]);if(command!=='DEPLOY')button.setAttribute('aria-checked',String(value===true));
+  else {button.dataset.state=state;button.disabled=false;}
+  button.disabled=value===null||commandBusy||Boolean(pendingInput)||Boolean(pendingRefresh)||(command==='DEPLOY'&&value===true);
   button.setAttribute('aria-busy',String(pendingInput?.command===command));
   const id=command==='LOAD'?'lockText':command==='ARM'?'armText':'deployText';
-  $('#'+id).textContent=value===null?(command==='LOAD'?'NOT AVAILABLE':command):command==='LOAD'?(value?'UNLOCKED':'LOCKED'):`${command} ${value?'ON':'OFF'}`;
+  $('#'+id).textContent=command==='ARM'?'Arm/Disarm System':command==='DEPLOY'?'DEPLOY':value===null?'NOT AVAILABLE':value?'UNLOCKED':'LOCKED';
  }
  const present=online&&typeof snapshot.dcmPresent==='boolean'?snapshot.dcmPresent:null;
  $('#attachmentText').textContent=present===null?'NOT AVAILABLE':present?'ATTACHED':'NOT ATTACHED';$('#presenceCell').dataset.attached=String(present===true);
  renderBattery('dds',online?snapshot.ddsBatteryPct:null);
  const t=snapshot?.telemetry;
  renderBattery('dcm',online&&t?.hasTelemetry===true&&t.dcmPmuOk===true?t.dcmBattPct:null);
- const age=ageMs();$('#dcmBattery').title=online&&age!==null?`Last battery packet: ${ageText(age)}`:'No DCM battery reading';
+ const age=ageMs();$('#dcmBattery').title=online&&age!==null?`Last battery packet: ${ageText(age)}`:'No Drone Communication Module battery reading';
  const current=freshTelemetry(),fix=current.dcmGnssOk===true;
  $('#latitudeValue').textContent=coordinate(fix?current.dcmLatDeg:null,'N','S',90);
  $('#longitudeValue').textContent=coordinate(fix?current.dcmLonDeg:null,'E','W',180);
@@ -128,26 +130,26 @@ function activateTab(tab) {
   }
 }
 function stateDescription(data){
- const descriptions={STANDBY:'DDS reports STANDBY. Lock/Unlock controls its maintained LOAD input.',LOAD:'DDS commands the loading position. Follow the existing loading sequence; attachment and LOAD OFF are interpreted by the firmware.',ARMED:'DDS entered ARMED. The firmware controls the arming delay, checks, and permission to deploy.',SOFTWARE_ERROR:'The firmware detected a software fault and requested a DCM restart. ARM OFF cancels automatic rearming.',DEPLOYING:'DDS is commanding release and monitoring the physical attachment switch.',DEPLOY_ERROR:'The attachment switch remained closed after the deploy timeout. The firmware is attempting servo recovery.',DEPLOY_FAILURE:'The firmware reports unsuccessful release after recovery. Acknowledge the failure after inspection.',DEPLOYED:'DDS detected separation. END / SLEEP requests the existing finish action.'};
- return descriptions[data.state]||`DDS reports state ${data.state}.`;
+ const descriptions={STANDBY:'Drone Deployment System reports STANDBY. Lock/Unlock controls its maintained LOAD input.',LOAD:'Drone Deployment System commands the loading position. Follow the existing loading sequence; attachment and LOAD OFF are interpreted by the firmware.',ARMED:'Drone Deployment System entered ARMED. The firmware controls the arming delay, checks, and permission to deploy.',SOFTWARE_ERROR:'The firmware detected a software fault and requested a Drone Communication Module restart. ARM OFF cancels automatic rearming.',DEPLOYING:'Drone Deployment System is commanding release and monitoring the physical attachment switch.',DEPLOY_ERROR:'The attachment switch remained closed after the deploy timeout. The firmware is attempting servo recovery.',DEPLOY_FAILURE:'The firmware reports unsuccessful release after recovery. Acknowledge the failure after inspection.',DEPLOYED:'Drone Deployment System detected separation. END / SLEEP requests the existing finish action.'};
+ return descriptions[data.state]||`Drone Deployment System reports state ${data.state}.`;
 }
 function applyStatus(data,requestStarted){
  if(!data||typeof data.state!=='string') throw new Error('Invalid status');
  const reconnected=!connected();snapshot=data;lastStatusAt=performance.now();wasOnline=true;
- if(reconnected)addMessage('success','DDS connected','The browser is receiving live status from the Heltec. No sample values are used.');
+ if(reconnected)addMessage('success','Drone Deployment System connected','The browser is receiving live status from the Heltec. No sample values are used.');
  if(previousState!==data.state){addMessage(['SOFTWARE_ERROR','DEPLOY_ERROR','DEPLOY_FAILURE'].includes(data.state)?'fault':'success',data.state.replaceAll('_',' '),stateDescription(data));previousState=data.state;}
  const t=data.telemetry||{},fresh=t.hasTelemetry===true&&Number.isFinite(t.ageMs)&&t.ageMs<=TELEMETRY_FRESH_MS;
  const packetKey=t.hasTelemetry===true?`${t.lastTelemetrySeq}:${Math.round(lastStatusAt-t.ageMs)}`:null;
  if(fresh&&t.dcmGnssOk===true&&Number.isFinite(t.dcmLatDeg)&&Number.isFinite(t.dcmLonDeg)&&Number.isFinite(t.dcmGpsAltM))gpsReceivedAt=lastStatusAt-t.ageMs;
- if(fresh&&['ARMED','DEPLOYING','DEPLOYED','DEPLOY_ERROR'].includes(data.state)&&typeof t.dcmGnssOk==='boolean'&&previousGps!==t.dcmGnssOk){addMessage(t.dcmGnssOk?'success':'warning',t.dcmGnssOk?'GPS update received':'No GPS fix',t.dcmGnssOk?'A valid GPS-bearing telemetry packet arrived. The receiver fix timestamp itself is not transmitted.':'DCM telemetry is arriving, but it does not report a valid GPS location.');previousGps=t.dcmGnssOk;}
- if(previousFresh===false&&fresh)addMessage('success','DCM update received','A fresh DCM telemetry packet was received by DDS.');previousFresh=fresh;
+ if(fresh&&['ARMED','DEPLOYING','DEPLOYED','DEPLOY_ERROR'].includes(data.state)&&typeof t.dcmGnssOk==='boolean'&&previousGps!==t.dcmGnssOk){addMessage(t.dcmGnssOk?'success':'warning',t.dcmGnssOk?'GPS update received':'No GPS fix',t.dcmGnssOk?'A valid GPS-bearing telemetry packet arrived. The receiver fix timestamp itself is not transmitted.':'Drone Communication Module telemetry is arriving, but it does not report a valid GPS location.');previousGps=t.dcmGnssOk;}
+ if(previousFresh===false&&fresh)addMessage('success','Drone Communication Module update received','A fresh Drone Communication Module telemetry packet was received by Drone Deployment System.');previousFresh=fresh;
  if(pendingInput&&pendingInput.acceptedAt!==null&&requestStarted>=pendingInput.acceptedAt){
   const request=pendingInput;pendingInput=null;
-  if(data.inputs?.[INPUTS[request.command]]!==request.value)addMessage('warning','Input was not retained','DDS reports a different lever value. Its automation may clear inputs, including DEPLOY before arming completes. The display follows DDS.');
+  if(data.inputs?.[INPUTS[request.command]]!==request.value)addMessage('warning','Input was not retained','Drone Deployment System reports a different lever value. Its automation may clear inputs, including DEPLOY before arming completes. The display follows Drone Deployment System.');
  }
  if(pendingRefresh&&pendingRefresh.acceptedAt!==null&&requestStarted>=pendingRefresh.acceptedAt&&t.hasTelemetry===true&&fresh&&(t.lastTelemetrySeq!==pendingRefresh.sequence||pendingRefresh.sequence===null)){
   const valid=t.dcmPmuOk===true&&Number.isFinite(t.dcmBattMv)&&t.dcmBattMv>0;
-  pendingRefresh=null;addMessage(valid?'success':'warning',valid?'Battery updated':'Battery unavailable',valid?'A new DCM packet containing a battery reading arrived.':'The DCM replied but did not report a usable battery voltage.');
+  pendingRefresh=null;addMessage(valid?'success':'warning',valid?'Battery updated':'Battery unavailable',valid?'A new Drone Communication Module packet containing a battery reading arrived.':'The Drone Communication Module replied but did not report a usable battery voltage.');
  }
  previousPacket=packetKey;render();
 }
@@ -160,31 +162,33 @@ async function postCommand(command,value){
  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),REQUEST_TIMEOUT_MS);
  try{const response=await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(body).toString(),signal:controller.signal});const result=await response.json();return {...result,ok:response.ok&&result.ok===true};}finally{clearTimeout(timer);}
 }
-async function toggleInput(command){
+async function toggleInput(command,requestedValue){
  if(!connected()||commandBusy||pendingInput||pendingRefresh)return;
  const current=snapshot.inputs?.[INPUTS[command]];if(typeof current!=='boolean')return;
- commandBusy=true;pendingInput={command,value:!current,acceptedAt:null};render();
- addMessage('input',`${command==='LOAD'?(!current?'Unlock':'Lock'):command+' '+(!current?'ON':'OFF')} requested`,'Operator input submitted. This does not confirm physical movement or a successful state transition.');
- try{const result=await postCommand(command,!current);if(!result.ok){pendingInput=null;addMessage('warning','Request rejected',result.message||'DDS did not accept the input.');}else{pendingInput.acceptedAt=performance.now();pendingInput.deadline=performance.now()+LINK_TIMEOUT_MS;}}catch(_){pendingInput=null;snapshot=null;addMessage('fault','Input unconfirmed','The response was lost. Waiting for a fresh DDS snapshot before another request; no automatic retry is sent.');}finally{commandBusy=false;render();pollStatus();}
+ const target=typeof requestedValue==='boolean'?requestedValue:!current;
+ if(target===current)return;
+ commandBusy=true;pendingInput={command,value:target,acceptedAt:null};render();
+ addMessage('input',`${command==='LOAD'?(target?'Unlock':'Lock'):command+' '+(target?'ON':'OFF')} requested`,'Operator input submitted. This does not confirm physical movement or a successful state transition.');
+ try{const result=await postCommand(command,target);if(!result.ok){pendingInput=null;addMessage('warning','Request rejected',result.message||'Drone Deployment System did not accept the input.');}else{pendingInput.acceptedAt=performance.now();pendingInput.deadline=performance.now()+LINK_TIMEOUT_MS;}}catch(_){pendingInput=null;snapshot=null;addMessage('fault','Input unconfirmed','The response was lost. Waiting for a fresh Drone Deployment System snapshot before another request; no automatic retry is sent.');}finally{commandBusy=false;render();pollStatus();}
 }
 async function requestRefresh(){
  if(!connected()||commandBusy||pendingInput||pendingRefresh)return;
  const sequence=snapshot.telemetry?.hasTelemetry===true?snapshot.telemetry.lastTelemetrySeq:null;
  commandBusy=true;pendingRefresh={sequence,acceptedAt:null};render();
- try{const result=await postCommand('CHECK_BATTERY');if(!result.ok){pendingRefresh=null;addMessage('warning','Refresh unavailable',result.message||'DDS could not request a battery update.');}else{pendingRefresh.acceptedAt=performance.now();pendingRefresh.deadline=performance.now()+6000;addMessage('input','Battery refresh requested',result.requested?'DDS sent the existing CHECK_BATTERY command. DCM should reply briefly with sensors off, then continue sleeping.':'The DCM is in an active operating state. Waiting for its next normal telemetry packet rather than changing its radio mode.');}}catch(_){pendingRefresh=null;snapshot=null;addMessage('fault','Refresh unconfirmed','No response from DDS. No repeated battery command will be sent automatically.');}finally{commandBusy=false;render();pollStatus();}
+ try{const result=await postCommand('CHECK_BATTERY');if(!result.ok){pendingRefresh=null;addMessage('warning','Refresh unavailable',result.message||'Drone Deployment System could not request a battery update.');}else{pendingRefresh.acceptedAt=performance.now();pendingRefresh.deadline=performance.now()+6000;addMessage('input','Battery refresh requested',result.requested?'Drone Deployment System sent the existing CHECK_BATTERY command. Drone Communication Module should reply briefly with sensors off, then continue sleeping.':'The Drone Communication Module is in an active operating state. Waiting for its next normal telemetry packet rather than changing its radio mode.');}}catch(_){pendingRefresh=null;snapshot=null;addMessage('fault','Refresh unconfirmed','No response from Drone Deployment System. No repeated battery command will be sent automatically.');}finally{commandBusy=false;render();pollStatus();}
 }
 async function stateAction(command){
  if(!connected()||commandBusy||pendingInput||pendingRefresh)return;
  if(!((command==='END'&&snapshot.state==='DEPLOYED')||(command==='ACK'&&snapshot.state==='DEPLOY_FAILURE')))return;
  commandBusy=true;render();
- try{const result=await postCommand(command);addMessage(result.ok?'input':'warning',result.ok?(command==='END'?'END / SLEEP requested':'Failure acknowledgment requested'):'Request rejected',result.ok?'The existing firmware command variable was set. Its FSM owns the resulting action.':result.message||'DDS rejected the input.');}catch(_){snapshot=null;addMessage('fault','Command unconfirmed','The response was lost. Wait for DDS status before sending another request.');}finally{commandBusy=false;render();pollStatus();}
+ try{const result=await postCommand(command);addMessage(result.ok?'input':'warning',result.ok?(command==='END'?'END / SLEEP requested':'Failure acknowledgment requested'):'Request rejected',result.ok?'The existing firmware command variable was set. Its FSM owns the resulting action.':result.message||'Drone Deployment System rejected the input.');}catch(_){snapshot=null;addMessage('fault','Command unconfirmed','The response was lost. Wait for Drone Deployment System status before sending another request.');}finally{commandBusy=false;render();pollStatus();}
 }
 function heartbeat(){
- if(wasOnline&&!connected()){wasOnline=false;addMessage('fault','DDS connection lost','No current status from Heltec. Inputs are unavailable until a new snapshot arrives.');}
- if(pendingInput?.deadline&&performance.now()>=pendingInput.deadline){pendingInput=null;snapshot=null;addMessage('fault','Input unconfirmed','DDS did not return a confirming status. Wait for the connection to recover.');}
- if(pendingRefresh?.deadline&&performance.now()>=pendingRefresh.deadline){pendingRefresh=null;addMessage('warning','No battery reply','No new DCM battery packet arrived before the refresh timeout. The last known reading remains displayed.');}
+ if(wasOnline&&!connected()){wasOnline=false;addMessage('fault','Drone Deployment System connection lost','No current status from Heltec. Inputs are unavailable until a new snapshot arrives.');}
+ if(pendingInput?.deadline&&performance.now()>=pendingInput.deadline){pendingInput=null;snapshot=null;addMessage('fault','Input unconfirmed','Drone Deployment System did not return a confirming status. Wait for the connection to recover.');}
+ if(pendingRefresh?.deadline&&performance.now()>=pendingRefresh.deadline){pendingRefresh=null;addMessage('warning','No battery reply','No new Drone Communication Module battery packet arrived before the refresh timeout. The last known reading remains displayed.');}
  const fresh=ageMs()!==null&&ageMs()<=TELEMETRY_FRESH_MS;
- if(connected()&&previousFresh===true&&!fresh&&['ARMED','DEPLOYING','DEPLOYED'].includes(snapshot.state)){addMessage('warning','DCM updates stopped','The displayed packet age continues increasing. Stale sensor and GPS readings are hidden.');previousFresh=false;}
+ if(connected()&&previousFresh===true&&!fresh&&['ARMED','DEPLOYING','DEPLOYED'].includes(snapshot.state)){addMessage('warning','Drone Communication Module updates stopped','The displayed packet age continues increasing. Stale sensor and GPS readings are hidden.');previousFresh=false;}
  render();
 }
 
@@ -214,9 +218,11 @@ document.querySelectorAll("dialog").forEach(dialog=>dialog.addEventListener("cli
 
 $('#lockSwitch').onclick=()=>toggleInput('LOAD');
 $('#armSwitch').onclick=()=>toggleInput('ARM');
-$('#deploySwitch').onclick=()=>toggleInput('DEPLOY');
+$('#deploySwitch').onclick=()=>{if(!$('#deploySwitch').disabled)$('#deployConfirmDialog').showModal();};
+$('#cancelDeployButton').onclick=()=>$('#deployConfirmDialog').close();
+$('#confirmDeployButton').onclick=()=>{$('#deployConfirmDialog').close();if(!$('#deploySwitch').disabled)toggleInput('DEPLOY',true);};
 $('#refreshButton').onclick=requestRefresh;
 $('#endSleepButton').onclick=()=>stateAction('END');
 $('#ackButton').onclick=()=>stateAction('ACK');
-addMessage('info','Waiting for DDS','Connect to the Heltec Wi-Fi and open its local cockpit address. Inputs and readings appear only after actual status arrives.');
+addMessage('info','Waiting for Drone Deployment System','Connect to the Heltec Wi-Fi and open its local cockpit address. Inputs and readings appear only after actual status arrives.');
 render();pollStatus();setInterval(pollStatus,POLL_MS);setInterval(heartbeat,POLL_MS);

@@ -18,7 +18,7 @@ function simTick(ms){const s=previewSim;if(s.paused||!s.online)return;s.now+=ms;
  case 'DEPLOY_ERROR':if(!s.attached)simState('DEPLOYED');else if(age>=1400)simState('DEPLOY_FAILURE');break;
  }
 }
-async function previewFetch(url,options={}){const s=previewSim;if(!s.online)throw new Error('Simulated DDS disconnect');
+async function previewFetch(url,options={}){const s=previewSim;if(!s.online)throw new Error('Simulated Drone Deployment System disconnect');
  if(url==='/api/status')return {ok:true,json:async()=>simSnapshot()};
  if(url!=='/api/command')throw new Error('Preview blocks external requests');
  const body=new URLSearchParams(options.body),command=body.get('command');let ok=true,requested=false;
@@ -38,12 +38,12 @@ function runScenario(name){const s=previewSim;Object.assign(s,{state:'STANDBY',i
  if(['ready','gpsMissing'].includes(name))s.entered=s.now-15000;
  if(['deploying','deployError','deployFailure','deployed','recovered'].includes(name)){s.inputs.DeployCommand=true;simState({deploying:'DEPLOYING',deployError:'DEPLOY_ERROR',deployFailure:'DEPLOY_FAILURE',deployed:'DEPLOYED',recovered:'DEPLOYED'}[name]);s.jammed=name==='deployError'||name==='deployFailure';s.attached=!['deployed','recovered'].includes(name);}
  if(name==='softwareError'){simState('SOFTWARE_ERROR');s.stream=false;description='Software fault: ARM OFF exits; the 60-second recovery period is simulated.';}
- if(name==='missing'){s.stream=false;s.has=false;description='No DCM reply. The arming wait runs, then the missing-data fault appears.';}
+ if(name==='missing'){s.stream=false;s.has=false;description='No Drone Communication Module reply. The arming wait runs, then the missing-data fault appears.';}
  if(name==='stale'){s.stream=false;s.last=s.now-5000;s.entered=s.now-15000;description='Telemetry is stale: GPS and sensor values are hidden; packet age keeps increasing. After 10 seconds without packets the simulated fault appears.';}
  if(name==='gpsMissing'){s.gps=false;description='Telemetry arrives with healthy sensors but no GPS fix.';}
  if(name==='lowBattery'){s.ddsPct=12;s.dcmPct=18;s.ddsMv=3620;s.dcmMv=3680;simPacket();description='Both battery indicators use their low-charge colors.';}
  if(name==='batteryOnly'){s.sensors=false;s.gps=false;simPacket();description='Battery-only reply. Sensors remain off and the stored battery persists after the packet becomes stale.';}
- if(name==='offline'){s.online=false;description='DDS disconnected. Levers and battery refresh are unavailable.';}
+ if(name==='offline'){s.online=false;description='Drone Deployment System disconnected. Levers and battery refresh are unavailable.';}
  if(name==='deployError')description='Release timed out; recovery is running. Select Release drone during recovery to succeed, or leave attached to reach DEPLOY FAILURE.';
  if(name==='ready')description='Arming wait completed with fresh telemetry. DEPLOY can now be selected.';
  if(name==='arming')description='15-second arming wait. Early DEPLOY inputs are cleared, matching the current firmware.';

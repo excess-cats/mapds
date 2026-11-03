@@ -32,20 +32,20 @@ const char WEB_MAIN_HTML[] PROGMEM = R"WEBHTML(<!doctype html>
   </header>
 
   <section class="battery-row" aria-label="Battery indicators">
-    <div class="battery-cell"><span class="eyebrow battery-title">DDS BATTERY</span><strong id="ddsBattery" class="battery-percent">--<span>%</span></strong><svg class="battery-graphic" aria-hidden="true" viewBox="0 0 32 20"><use href="#i-battery"/><rect id="ddsFill" x="5" y="6" width="0" height="8"/><path class="battery-dividers" d="M9.5 5v10M14 5v10M18.5 5v10"/></svg></div>
-    <div class="battery-cell"><span class="eyebrow battery-title">DCM BATTERY</span><strong id="dcmBattery" class="battery-percent">--<span>%</span></strong><button id="refreshButton" class="framed-button refresh-button" type="button" aria-label="Refresh DCM battery" title="Refresh DCM battery"><svg class="icon"><use href="#i-refresh"/></svg></button><svg class="battery-graphic" aria-hidden="true" viewBox="0 0 32 20"><use href="#i-battery"/><rect id="dcmFill" x="5" y="6" width="0" height="8"/><path class="battery-dividers" d="M9.5 5v10M14 5v10M18.5 5v10"/></svg></div>
+    <div class="battery-cell"><span class="eyebrow battery-title">Drone Deployment System BATTERY</span><strong id="ddsBattery" class="battery-percent">--<span>%</span></strong><svg class="battery-graphic" aria-hidden="true" viewBox="0 0 32 20"><use href="#i-battery"/><rect id="ddsFill" x="5" y="6" width="0" height="8"/><path class="battery-dividers" d="M9.5 5v10M14 5v10M18.5 5v10"/></svg></div>
+    <div class="battery-cell"><span class="eyebrow battery-title">Drone Communication Module BATTERY</span><strong id="dcmBattery" class="battery-percent">--<span>%</span></strong><button id="refreshButton" class="framed-button refresh-button" type="button" aria-label="Refresh Drone Communication Module battery" title="Refresh Drone Communication Module battery"><svg class="icon"><use href="#i-refresh"/></svg></button><svg class="battery-graphic" aria-hidden="true" viewBox="0 0 32 20"><use href="#i-battery"/><rect id="dcmFill" x="5" y="6" width="0" height="8"/><path class="battery-dividers" d="M9.5 5v10M14 5v10M18.5 5v10"/></svg></div>
   </section>
 
   <main class="display-area">
     <section id="groundView" class="ground-grid" role="tabpanel" aria-labelledby="groundTab">
-      <button id="lockSwitch" disabled class="cell control-cell ground-lock" type="button" role="switch" aria-checked="false" aria-label="Unlock DDS"><span class="toggle-track" aria-hidden="true"><span class="toggle-handle"></span></span><strong id="lockText" class="control-label">NOT AVAILABLE</strong></button>
+      <button id="lockSwitch" disabled class="cell control-cell ground-lock" type="button" role="switch" aria-checked="false" aria-label="Unlock Drone Deployment System"><span class="toggle-track" aria-hidden="true"><span class="toggle-handle"></span></span><strong id="lockText" class="control-label">NOT AVAILABLE</strong></button>
       <div id="presenceCell" class="cell presence-cell" data-attached="false"><span class="eyebrow">PRESENCE</span><div class="presence-reading" aria-live="polite"><span id="attachmentDot" class="indicator-dot"></span><strong id="attachmentText">NOT AVAILABLE</strong></div></div>
       <div class="cell state-cell ground-state" data-state="OFFLINE"><span class="eyebrow">SYSTEM STATE</span><strong class="state-name" data-state-name>OFFLINE</strong><span class="arm-countdown" data-arm-countdown hidden></span></div>
     </section>
 
     <section id="flightView" class="flight-grid" role="tabpanel" aria-labelledby="flightTab" hidden>
-      <button id="armSwitch" disabled class="cell control-cell flight-arm" type="button" role="switch" aria-checked="false" aria-label="ARM input"><span class="toggle-track" aria-hidden="true"><span class="toggle-handle"></span></span><strong id="armText" class="control-label">ARM</strong></button>
-      <button id="deploySwitch" disabled class="cell control-cell flight-deploy" type="button" role="switch" aria-checked="false" aria-label="DEPLOY input"><span class="toggle-track" aria-hidden="true"><span class="toggle-handle"></span></span><strong id="deployText" class="control-label">DEPLOY</strong></button>
+      <button id="armSwitch" disabled class="cell control-cell flight-arm" type="button" role="switch" aria-checked="false" aria-label="Arm/Disarm System"><span class="toggle-track" aria-hidden="true"><span class="toggle-handle"></span></span><strong id="armText" class="control-label">Arm/Disarm System</strong></button>
+      <button id="deploySwitch" disabled class="cell control-cell flight-deploy deploy-button" type="button" aria-label="Deploy drone" aria-haspopup="dialog" aria-controls="deployConfirmDialog"><svg class="deploy-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><strong id="deployText" class="control-label">DEPLOY</strong></button>
       <div class="cell state-cell flight-state" data-state="OFFLINE"><span class="eyebrow">SYSTEM STATE</span><strong class="state-name" data-state-name>OFFLINE</strong><span class="arm-countdown" data-arm-countdown hidden></span><div class="state-actions"><button id="endSleepButton" class="framed-button" type="button" disabled>END / SLEEP</button><button id="ackButton" class="framed-button" type="button" hidden>ACKNOWLEDGE FAILURE</button></div></div>
       <div class="cell gps-cell"><div class="cell-heading"><span class="eyebrow">GPS</span><button id="telemetryButton" class="framed-button" type="button">Telemetry<svg class="icon"><use href="#i-open"/></svg></button></div><div class="gps-grid"><div><span>Latitude</span><strong id="latitudeValue">NOT AVAILABLE</strong></div><div><span>Longitude</span><strong id="longitudeValue">NOT AVAILABLE</strong></div><div><span>Altitude</span><strong id="altitudeValue">NOT AVAILABLE</strong></div><div><span>Last GPS update</span><strong id="gpsAge" title="Age of the last received telemetry with valid GPS; the receiver fix timestamp is not in the packet.">NOT AVAILABLE</strong></div></div></div>
     </section>
@@ -56,7 +56,8 @@ const char WEB_MAIN_HTML[] PROGMEM = R"WEBHTML(<!doctype html>
 
 <dialog id="historyDialog" class="history-dialog" aria-labelledby="historyTitle"><div class="dialog-heading"><h2 id="historyTitle">Session log</h2><button class="close-button" data-close="historyDialog" type="button" aria-label="Close session log"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="history-layout"><div id="historyList" class="history-list"></div><article class="message-detail"><span id="detailLevel" class="eyebrow">MESSAGE DETAILS</span><h3 id="detailTitle">Select a message</h3><time id="detailTime"></time><p id="detailBody"></p></article></div></dialog>
 
-<dialog id="telemetryDialog" class="telemetry-dialog" aria-labelledby="telemetryTitle"><div class="dialog-heading"><h2 id="telemetryTitle">Telemetry</h2><button class="close-button" data-close="telemetryDialog" type="button" aria-label="Close telemetry"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="telemetry-body"><table><tbody><tr><th>DDS battery voltage</th><td id="ddsVoltage">NOT AVAILABLE</td></tr><tr><th>DCM battery voltage</th><td id="dcmVoltage">NOT AVAILABLE</td></tr><tr><th>Power system</th><td id="pmuValue">NOT AVAILABLE</td></tr><tr><th>GPS fix</th><td id="fixValue">NOT AVAILABLE</td></tr><tr><th>Motion sensor</th><td id="imuValue">NOT AVAILABLE</td></tr><tr><th>Compass</th><td id="magHealthValue">NOT AVAILABLE</td></tr><tr><th>Environmental sensor</th><td id="bmeValue">NOT AVAILABLE</td></tr><tr><th>Temperature</th><td id="temperatureValue">NOT AVAILABLE</td></tr><tr><th>Humidity</th><td id="humidityValue">NOT AVAILABLE</td></tr><tr><th>Pressure</th><td id="pressureValue">NOT AVAILABLE</td></tr><tr><th>Acceleration X / Y / Z</th><td id="accelValue">NOT AVAILABLE</td></tr><tr><th>Angular rate X / Y / Z</th><td id="gyroValue">NOT AVAILABLE</td></tr><tr><th>Magnetic field X / Y / Z</th><td id="magValue">NOT AVAILABLE</td></tr><tr><th>Signal strength</th><td id="rssiValue">NOT AVAILABLE</td></tr><tr><th>Signal-to-noise ratio</th><td id="snrValue">NOT AVAILABLE</td></tr><tr><th>Last packet received</th><td id="packetAgeValue">NOT AVAILABLE</td></tr><tr><th>Packet number</th><td id="packetNumberValue">NOT AVAILABLE</td></tr></tbody></table></div></dialog>
+<dialog id="telemetryDialog" class="telemetry-dialog" aria-labelledby="telemetryTitle"><div class="dialog-heading"><h2 id="telemetryTitle">Telemetry</h2><button class="close-button" data-close="telemetryDialog" type="button" aria-label="Close telemetry"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="telemetry-body"><table><tbody><tr><th>Drone Deployment System battery voltage</th><td id="ddsVoltage">NOT AVAILABLE</td></tr><tr><th>Drone Communication Module battery voltage</th><td id="dcmVoltage">NOT AVAILABLE</td></tr><tr><th>Power system</th><td id="pmuValue">NOT AVAILABLE</td></tr><tr><th>GPS fix</th><td id="fixValue">NOT AVAILABLE</td></tr><tr><th>Motion sensor</th><td id="imuValue">NOT AVAILABLE</td></tr><tr><th>Compass</th><td id="magHealthValue">NOT AVAILABLE</td></tr><tr><th>Environmental sensor</th><td id="bmeValue">NOT AVAILABLE</td></tr><tr><th>Temperature</th><td id="temperatureValue">NOT AVAILABLE</td></tr><tr><th>Humidity</th><td id="humidityValue">NOT AVAILABLE</td></tr><tr><th>Pressure</th><td id="pressureValue">NOT AVAILABLE</td></tr><tr><th>Acceleration X / Y / Z</th><td id="accelValue">NOT AVAILABLE</td></tr><tr><th>Angular rate X / Y / Z</th><td id="gyroValue">NOT AVAILABLE</td></tr><tr><th>Magnetic field X / Y / Z</th><td id="magValue">NOT AVAILABLE</td></tr><tr><th>Signal strength</th><td id="rssiValue">NOT AVAILABLE</td></tr><tr><th>Signal-to-noise ratio</th><td id="snrValue">NOT AVAILABLE</td></tr><tr><th>Last packet received</th><td id="packetAgeValue">NOT AVAILABLE</td></tr><tr><th>Packet number</th><td id="packetNumberValue">NOT AVAILABLE</td></tr></tbody></table></div></dialog>
+<dialog id="deployConfirmDialog" aria-labelledby="deployConfirmTitle"><div class="dialog-heading"><h2 id="deployConfirmTitle">Confirm deployment</h2></div><div class="deploy-confirm-body"><p>Are you sure you want to deploy the drone?</p><div class="deploy-confirm-actions"><button id="cancelDeployButton" class="framed-button" type="button" autofocus>Cancel</button><button id="confirmDeployButton" class="framed-button confirm-deploy" type="button">Yes, deploy</button></div></div></dialog>
 </body>
 </html>
 )WEBHTML";
@@ -91,17 +92,17 @@ button:disabled { cursor: default; opacity: .55; }
 .battery-title { position: absolute; left: 18px; top: 12px; }
 .battery-percent { font-size: clamp(38px,5vw,64px); font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
 .battery-percent > span { font-size: .55em; margin-left: 3px; }
-.battery-graphic { position: absolute; right: 18px; top: 50%; width: 52px; height: 34px; transform: translateY(-35%); color: var(--green); fill: currentColor; }
+.battery-graphic { position: absolute; right: 18px; top: 50%; width: clamp(42px,6vw,80px); height: clamp(28px,4vw,50px); transform: translateY(-35%); color: var(--green); fill: currentColor; }
 .framed-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--muted); border-radius: 3px; background: transparent; font-size: 12px; font-weight: 600; }
 .framed-button .icon { width: 16px; height: 16px; }
 .framed-button:hover:not(:disabled), .close-button:hover { background: var(--bar); }
-.refresh-button { position: absolute; right: 84px; top: 50%; transform: translateY(-35%); width: 36px; height: 34px; padding: 6px; }
-.refresh-button .icon { width: 22px; height: 22px; }
+.refresh-button { position: absolute; right: calc(30px + clamp(42px,6vw,80px)); top: 50%; transform: translateY(-35%); width: clamp(34px,4vw,50px); height: clamp(34px,4vw,50px); padding: 6px; }
+.refresh-button .icon { width: 100%; height: 100%; }
 .refresh-button[data-busy=true] .icon { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .display-area { min-height: 0; }
 .ground-grid, .flight-grid { height: 100%; display: grid; min-height: 0; }
-.ground-grid { grid-template-columns: 2fr 1fr; grid-template-rows: 1fr 1.3fr; }
+.ground-grid { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1.3fr; }
 .flight-grid { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1.3fr; }
 .cell { position: relative; padding: clamp(12px,2vw,28px); border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); min-width: 0; min-height: 0; overflow: auto; }
 .ground-state { grid-column: 1/-1; }
@@ -111,7 +112,7 @@ button:disabled { cursor: default; opacity: .55; }
 .control-cell[aria-checked=true] { background: #cfe4ff; color: #15232b; }
 .flight-arm[aria-checked=true] { background: #fff7a1; }
 .flight-deploy[aria-checked=true] { background: #fe7070; }
-.toggle-track { display: block; width: clamp(110px,14vw,180px); height: clamp(48px,6vw,74px); padding: 6px; border: 3px solid currentColor; border-radius: 50px; }
+.toggle-track { display: block; width: clamp(130px,20vw,280px); height: clamp(58px,8vw,112px); padding: 6px; border: 3px solid currentColor; border-radius: 50px; }
 .toggle-handle { display: block; height: 100%; aspect-ratio: 1; border-radius: 50%; background: currentColor; }
 .control-cell[aria-checked=true] .toggle-handle { margin-left: auto; }
 .control-label { font-size: clamp(23px,3.7vw,48px); font-weight: 650; line-height: 1.1; }
@@ -178,13 +179,13 @@ html[data-vision=nvg] .presence-cell[data-attached=true] .eyebrow { color: var(-
   .topbar { --nvg-width:43px; }
   .battery-title { left:10px; top:10px; }
   .battery-percent { font-size:40px; }
-  .battery-graphic { width:30px; height:22px; right:10px; }
-  .refresh-button { right:45px; width:28px; height:28px; padding:4px; }
-  .refresh-button .icon { width:18px; height:18px; }
+  .battery-graphic { width:36px; height:24px; right:10px; }
+  .refresh-button { right:54px; width:32px; height:32px; padding:4px; }
+  .refresh-button .icon { width:100%; height:100%; }
   .battery-cell { padding-top:17px; }
   .cell { padding:12px; }
-  .ground-grid { grid-template-columns:2fr 1fr; }
-  .toggle-track { width:100px; height:46px; padding:5px; border-width:2px; }
+  .ground-grid { grid-template-columns:1fr 1fr; }
+  .toggle-track { width:clamp(100px,25vw,160px); height:clamp(46px,11vw,70px); padding:5px; border-width:2px; }
   .control-label { font-size:24px; }
   .presence-cell .eyebrow, .state-cell .eyebrow { left:12px; top:12px; }
   .presence-reading { gap:6px; flex-direction:column; }
@@ -219,10 +220,30 @@ html[data-vision=nvg] .presence-cell[data-attached=true] .eyebrow { color: var(-
 @media(max-width:650px) { .gps-grid strong { font-size:12px; } }
 
 .arm-countdown { margin-top:12px; font-size:clamp(12px,1.5vw,20px); text-align:center; line-height:1.4; }
+
+/* Deployment is a confirmed action, not a maintained visual switch. */
+.flight-arm .control-label { font-size:clamp(18px,3vw,42px); text-align:center; }
+.deploy-button { background:#b8d5c1; color:#19382a; box-shadow:inset 0 0 0 3px #799e87; gap:12px; }
+.deploy-icon { width:clamp(48px,7vw,100px); height:clamp(48px,7vw,100px); }
+.deploy-button[data-state="DEPLOYING"] { background:#fff7a1; color:#15232b; }
+.deploy-button[data-state="DEPLOYED"] { background:#c3f7c8; color:#15232b; opacity:1; }
+html[data-vision=nvg] .deploy-button { background:#14271d; color:var(--green); box-shadow:inset 0 0 0 3px #385943; }
+html[data-vision=nvg] .deploy-button[data-state="DEPLOYING"] { background:#292719; color:var(--amber); }
+html[data-vision=nvg] .deploy-button[data-state="DEPLOYED"] { background:#10251b; color:var(--green); }
+.deploy-confirm-body { padding:20px; }
+.deploy-confirm-actions { display:flex; justify-content:flex-end; gap:12px; margin-top:24px; }
+.confirm-deploy { background:#b8d5c1; color:#19382a; padding:12px 22px; }
+html[data-vision=nvg] .confirm-deploy { background:#14271d; color:var(--green); }
+
+/* Battery percentage and icon share the same charge-level colors. */
+.battery-percent[data-level="unknown"] { color:var(--muted); }
+.battery-percent[data-level="fault"] { color:var(--red); }
+.battery-percent[data-level="warning"] { color:var(--amber); }
+.battery-percent[data-level="good"] { color:var(--green); }
 )WEBCSS";
 
 const char WEB_INTERFACE_JS[] PROGMEM = R"WEBJS("use strict";
-// Live webpage only. The DDS FSM owns all transitions and physical actions.
+// Live webpage only. The Drone Deployment System FSM owns all transitions and physical actions.
 // API status contains raw inputs, indicators and telemetry; POSTs set existing inputs.
 const $ = selector => document.querySelector(selector);
 const POLL_MS=1000, LINK_TIMEOUT_MS=3500, TELEMETRY_FRESH_MS=3500, REQUEST_TIMEOUT_MS=2500;
@@ -265,7 +286,8 @@ function renderBattery(prefix,percentage){
  const text=$('#'+prefix+'Battery');text.replaceChildren(document.createTextNode(valid?String(Math.round(percentage)):'--'));
  const unit=document.createElement('span');unit.textContent='%';text.appendChild(unit);
  const fill=$('#'+prefix+'Fill');fill.setAttribute('width',valid?String(18*percentage/100):'0');
- fill.parentElement.dataset.level=!valid?'unknown':percentage<=15?'fault':percentage<=20?'warning':'good';
+ const level=!valid?'unknown':percentage<=20?'fault':percentage<=35?'warning':'good';
+ text.dataset.level=level;fill.parentElement.dataset.level=level;
 }
 function renderTelemetry(t){
  $('#ddsVoltage').textContent=numberText(connected()&&snapshot.ddsBatteryMv>0?snapshot.ddsBatteryMv/1000:null,'V',2);
@@ -282,9 +304,9 @@ function renderTelemetry(t){
  $('#gyroValue').textContent=vectorText(t.dcmImuOk===true?t.dcmGyroDps:null,'\u00b0/s');
  $('#magValue').textContent=vectorText(t.dcmMagOk===true?t.dcmMagGauss:null,'G');
  $('#rssiValue').textContent=numberText(t.lastRssi,'dBm');$('#snrValue').textContent=numberText(t.lastSnr,'dB');
- $('#packetAgeValue').textContent=connected()?(ageMs()===null?'NO PACKETS YET':ageText(ageMs())):'DDS DISCONNECTED';
+ $('#packetAgeValue').textContent=connected()?(ageMs()===null?'NO PACKETS YET':ageText(ageMs())):'Drone Deployment System DISCONNECTED';
  $('#packetNumberValue').textContent=connected()&&battery?.hasTelemetry===true&&Number.isFinite(battery.lastTelemetrySeq)?String(battery.lastTelemetrySeq):'NOT AVAILABLE';
- $('#packetNumberValue').title='Sequence number reported by the DCM; it may restart or wrap. This is not a total received-packet count.';
+ $('#packetNumberValue').title='Sequence number reported by the Drone Communication Module; it may restart or wrap. This is not a total received-packet count.';
 }
 function render(){
  const online=connected(),state=online?snapshot.state:'OFFLINE';setDisplayedState(state);
@@ -296,18 +318,19 @@ function render(){
  });
  for(const [command,key] of Object.entries(INPUTS)){
   const value=online&&typeof snapshot.inputs?.[key]==='boolean'?snapshot.inputs[key]:null;
-  const button=$('#'+BUTTONS[command]);button.setAttribute('aria-checked',String(value===true));
-  button.disabled=value===null||commandBusy||Boolean(pendingInput)||Boolean(pendingRefresh);
+  const button=$('#'+BUTTONS[command]);if(command!=='DEPLOY')button.setAttribute('aria-checked',String(value===true));
+  else {button.dataset.state=state;button.disabled=false;}
+  button.disabled=value===null||commandBusy||Boolean(pendingInput)||Boolean(pendingRefresh)||(command==='DEPLOY'&&value===true);
   button.setAttribute('aria-busy',String(pendingInput?.command===command));
   const id=command==='LOAD'?'lockText':command==='ARM'?'armText':'deployText';
-  $('#'+id).textContent=value===null?(command==='LOAD'?'NOT AVAILABLE':command):command==='LOAD'?(value?'UNLOCKED':'LOCKED'):`${command} ${value?'ON':'OFF'}`;
+  $('#'+id).textContent=command==='ARM'?'Arm/Disarm System':command==='DEPLOY'?'DEPLOY':value===null?'NOT AVAILABLE':value?'UNLOCKED':'LOCKED';
  }
  const present=online&&typeof snapshot.dcmPresent==='boolean'?snapshot.dcmPresent:null;
  $('#attachmentText').textContent=present===null?'NOT AVAILABLE':present?'ATTACHED':'NOT ATTACHED';$('#presenceCell').dataset.attached=String(present===true);
  renderBattery('dds',online?snapshot.ddsBatteryPct:null);
  const t=snapshot?.telemetry;
  renderBattery('dcm',online&&t?.hasTelemetry===true&&t.dcmPmuOk===true?t.dcmBattPct:null);
- const age=ageMs();$('#dcmBattery').title=online&&age!==null?`Last battery packet: ${ageText(age)}`:'No DCM battery reading';
+ const age=ageMs();$('#dcmBattery').title=online&&age!==null?`Last battery packet: ${ageText(age)}`:'No Drone Communication Module battery reading';
  const current=freshTelemetry(),fix=current.dcmGnssOk===true;
  $('#latitudeValue').textContent=coordinate(fix?current.dcmLatDeg:null,'N','S',90);
  $('#longitudeValue').textContent=coordinate(fix?current.dcmLonDeg:null,'E','W',180);
@@ -351,26 +374,26 @@ function activateTab(tab) {
   }
 }
 function stateDescription(data){
- const descriptions={STANDBY:'DDS reports STANDBY. Lock/Unlock controls its maintained LOAD input.',LOAD:'DDS commands the loading position. Follow the existing loading sequence; attachment and LOAD OFF are interpreted by the firmware.',ARMED:'DDS entered ARMED. The firmware controls the arming delay, checks, and permission to deploy.',SOFTWARE_ERROR:'The firmware detected a software fault and requested a DCM restart. ARM OFF cancels automatic rearming.',DEPLOYING:'DDS is commanding release and monitoring the physical attachment switch.',DEPLOY_ERROR:'The attachment switch remained closed after the deploy timeout. The firmware is attempting servo recovery.',DEPLOY_FAILURE:'The firmware reports unsuccessful release after recovery. Acknowledge the failure after inspection.',DEPLOYED:'DDS detected separation. END / SLEEP requests the existing finish action.'};
- return descriptions[data.state]||`DDS reports state ${data.state}.`;
+ const descriptions={STANDBY:'Drone Deployment System reports STANDBY. Lock/Unlock controls its maintained LOAD input.',LOAD:'Drone Deployment System commands the loading position. Follow the existing loading sequence; attachment and LOAD OFF are interpreted by the firmware.',ARMED:'Drone Deployment System entered ARMED. The firmware controls the arming delay, checks, and permission to deploy.',SOFTWARE_ERROR:'The firmware detected a software fault and requested a Drone Communication Module restart. ARM OFF cancels automatic rearming.',DEPLOYING:'Drone Deployment System is commanding release and monitoring the physical attachment switch.',DEPLOY_ERROR:'The attachment switch remained closed after the deploy timeout. The firmware is attempting servo recovery.',DEPLOY_FAILURE:'The firmware reports unsuccessful release after recovery. Acknowledge the failure after inspection.',DEPLOYED:'Drone Deployment System detected separation. END / SLEEP requests the existing finish action.'};
+ return descriptions[data.state]||`Drone Deployment System reports state ${data.state}.`;
 }
 function applyStatus(data,requestStarted){
  if(!data||typeof data.state!=='string') throw new Error('Invalid status');
  const reconnected=!connected();snapshot=data;lastStatusAt=performance.now();wasOnline=true;
- if(reconnected)addMessage('success','DDS connected','The browser is receiving live status from the Heltec. No sample values are used.');
+ if(reconnected)addMessage('success','Drone Deployment System connected','The browser is receiving live status from the Heltec. No sample values are used.');
  if(previousState!==data.state){addMessage(['SOFTWARE_ERROR','DEPLOY_ERROR','DEPLOY_FAILURE'].includes(data.state)?'fault':'success',data.state.replaceAll('_',' '),stateDescription(data));previousState=data.state;}
  const t=data.telemetry||{},fresh=t.hasTelemetry===true&&Number.isFinite(t.ageMs)&&t.ageMs<=TELEMETRY_FRESH_MS;
  const packetKey=t.hasTelemetry===true?`${t.lastTelemetrySeq}:${Math.round(lastStatusAt-t.ageMs)}`:null;
  if(fresh&&t.dcmGnssOk===true&&Number.isFinite(t.dcmLatDeg)&&Number.isFinite(t.dcmLonDeg)&&Number.isFinite(t.dcmGpsAltM))gpsReceivedAt=lastStatusAt-t.ageMs;
- if(fresh&&['ARMED','DEPLOYING','DEPLOYED','DEPLOY_ERROR'].includes(data.state)&&typeof t.dcmGnssOk==='boolean'&&previousGps!==t.dcmGnssOk){addMessage(t.dcmGnssOk?'success':'warning',t.dcmGnssOk?'GPS update received':'No GPS fix',t.dcmGnssOk?'A valid GPS-bearing telemetry packet arrived. The receiver fix timestamp itself is not transmitted.':'DCM telemetry is arriving, but it does not report a valid GPS location.');previousGps=t.dcmGnssOk;}
- if(previousFresh===false&&fresh)addMessage('success','DCM update received','A fresh DCM telemetry packet was received by DDS.');previousFresh=fresh;
+ if(fresh&&['ARMED','DEPLOYING','DEPLOYED','DEPLOY_ERROR'].includes(data.state)&&typeof t.dcmGnssOk==='boolean'&&previousGps!==t.dcmGnssOk){addMessage(t.dcmGnssOk?'success':'warning',t.dcmGnssOk?'GPS update received':'No GPS fix',t.dcmGnssOk?'A valid GPS-bearing telemetry packet arrived. The receiver fix timestamp itself is not transmitted.':'Drone Communication Module telemetry is arriving, but it does not report a valid GPS location.');previousGps=t.dcmGnssOk;}
+ if(previousFresh===false&&fresh)addMessage('success','Drone Communication Module update received','A fresh Drone Communication Module telemetry packet was received by Drone Deployment System.');previousFresh=fresh;
  if(pendingInput&&pendingInput.acceptedAt!==null&&requestStarted>=pendingInput.acceptedAt){
   const request=pendingInput;pendingInput=null;
-  if(data.inputs?.[INPUTS[request.command]]!==request.value)addMessage('warning','Input was not retained','DDS reports a different lever value. Its automation may clear inputs, including DEPLOY before arming completes. The display follows DDS.');
+  if(data.inputs?.[INPUTS[request.command]]!==request.value)addMessage('warning','Input was not retained','Drone Deployment System reports a different lever value. Its automation may clear inputs, including DEPLOY before arming completes. The display follows Drone Deployment System.');
  }
  if(pendingRefresh&&pendingRefresh.acceptedAt!==null&&requestStarted>=pendingRefresh.acceptedAt&&t.hasTelemetry===true&&fresh&&(t.lastTelemetrySeq!==pendingRefresh.sequence||pendingRefresh.sequence===null)){
   const valid=t.dcmPmuOk===true&&Number.isFinite(t.dcmBattMv)&&t.dcmBattMv>0;
-  pendingRefresh=null;addMessage(valid?'success':'warning',valid?'Battery updated':'Battery unavailable',valid?'A new DCM packet containing a battery reading arrived.':'The DCM replied but did not report a usable battery voltage.');
+  pendingRefresh=null;addMessage(valid?'success':'warning',valid?'Battery updated':'Battery unavailable',valid?'A new Drone Communication Module packet containing a battery reading arrived.':'The Drone Communication Module replied but did not report a usable battery voltage.');
  }
  previousPacket=packetKey;render();
 }
@@ -383,31 +406,33 @@ async function postCommand(command,value){
  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),REQUEST_TIMEOUT_MS);
  try{const response=await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(body).toString(),signal:controller.signal});const result=await response.json();return {...result,ok:response.ok&&result.ok===true};}finally{clearTimeout(timer);}
 }
-async function toggleInput(command){
+async function toggleInput(command,requestedValue){
  if(!connected()||commandBusy||pendingInput||pendingRefresh)return;
  const current=snapshot.inputs?.[INPUTS[command]];if(typeof current!=='boolean')return;
- commandBusy=true;pendingInput={command,value:!current,acceptedAt:null};render();
- addMessage('input',`${command==='LOAD'?(!current?'Unlock':'Lock'):command+' '+(!current?'ON':'OFF')} requested`,'Operator input submitted. This does not confirm physical movement or a successful state transition.');
- try{const result=await postCommand(command,!current);if(!result.ok){pendingInput=null;addMessage('warning','Request rejected',result.message||'DDS did not accept the input.');}else{pendingInput.acceptedAt=performance.now();pendingInput.deadline=performance.now()+LINK_TIMEOUT_MS;}}catch(_){pendingInput=null;snapshot=null;addMessage('fault','Input unconfirmed','The response was lost. Waiting for a fresh DDS snapshot before another request; no automatic retry is sent.');}finally{commandBusy=false;render();pollStatus();}
+ const target=typeof requestedValue==='boolean'?requestedValue:!current;
+ if(target===current)return;
+ commandBusy=true;pendingInput={command,value:target,acceptedAt:null};render();
+ addMessage('input',`${command==='LOAD'?(target?'Unlock':'Lock'):command+' '+(target?'ON':'OFF')} requested`,'Operator input submitted. This does not confirm physical movement or a successful state transition.');
+ try{const result=await postCommand(command,target);if(!result.ok){pendingInput=null;addMessage('warning','Request rejected',result.message||'Drone Deployment System did not accept the input.');}else{pendingInput.acceptedAt=performance.now();pendingInput.deadline=performance.now()+LINK_TIMEOUT_MS;}}catch(_){pendingInput=null;snapshot=null;addMessage('fault','Input unconfirmed','The response was lost. Waiting for a fresh Drone Deployment System snapshot before another request; no automatic retry is sent.');}finally{commandBusy=false;render();pollStatus();}
 }
 async function requestRefresh(){
  if(!connected()||commandBusy||pendingInput||pendingRefresh)return;
  const sequence=snapshot.telemetry?.hasTelemetry===true?snapshot.telemetry.lastTelemetrySeq:null;
  commandBusy=true;pendingRefresh={sequence,acceptedAt:null};render();
- try{const result=await postCommand('CHECK_BATTERY');if(!result.ok){pendingRefresh=null;addMessage('warning','Refresh unavailable',result.message||'DDS could not request a battery update.');}else{pendingRefresh.acceptedAt=performance.now();pendingRefresh.deadline=performance.now()+6000;addMessage('input','Battery refresh requested',result.requested?'DDS sent the existing CHECK_BATTERY command. DCM should reply briefly with sensors off, then continue sleeping.':'The DCM is in an active operating state. Waiting for its next normal telemetry packet rather than changing its radio mode.');}}catch(_){pendingRefresh=null;snapshot=null;addMessage('fault','Refresh unconfirmed','No response from DDS. No repeated battery command will be sent automatically.');}finally{commandBusy=false;render();pollStatus();}
+ try{const result=await postCommand('CHECK_BATTERY');if(!result.ok){pendingRefresh=null;addMessage('warning','Refresh unavailable',result.message||'Drone Deployment System could not request a battery update.');}else{pendingRefresh.acceptedAt=performance.now();pendingRefresh.deadline=performance.now()+6000;addMessage('input','Battery refresh requested',result.requested?'Drone Deployment System sent the existing CHECK_BATTERY command. Drone Communication Module should reply briefly with sensors off, then continue sleeping.':'The Drone Communication Module is in an active operating state. Waiting for its next normal telemetry packet rather than changing its radio mode.');}}catch(_){pendingRefresh=null;snapshot=null;addMessage('fault','Refresh unconfirmed','No response from Drone Deployment System. No repeated battery command will be sent automatically.');}finally{commandBusy=false;render();pollStatus();}
 }
 async function stateAction(command){
  if(!connected()||commandBusy||pendingInput||pendingRefresh)return;
  if(!((command==='END'&&snapshot.state==='DEPLOYED')||(command==='ACK'&&snapshot.state==='DEPLOY_FAILURE')))return;
  commandBusy=true;render();
- try{const result=await postCommand(command);addMessage(result.ok?'input':'warning',result.ok?(command==='END'?'END / SLEEP requested':'Failure acknowledgment requested'):'Request rejected',result.ok?'The existing firmware command variable was set. Its FSM owns the resulting action.':result.message||'DDS rejected the input.');}catch(_){snapshot=null;addMessage('fault','Command unconfirmed','The response was lost. Wait for DDS status before sending another request.');}finally{commandBusy=false;render();pollStatus();}
+ try{const result=await postCommand(command);addMessage(result.ok?'input':'warning',result.ok?(command==='END'?'END / SLEEP requested':'Failure acknowledgment requested'):'Request rejected',result.ok?'The existing firmware command variable was set. Its FSM owns the resulting action.':result.message||'Drone Deployment System rejected the input.');}catch(_){snapshot=null;addMessage('fault','Command unconfirmed','The response was lost. Wait for Drone Deployment System status before sending another request.');}finally{commandBusy=false;render();pollStatus();}
 }
 function heartbeat(){
- if(wasOnline&&!connected()){wasOnline=false;addMessage('fault','DDS connection lost','No current status from Heltec. Inputs are unavailable until a new snapshot arrives.');}
- if(pendingInput?.deadline&&performance.now()>=pendingInput.deadline){pendingInput=null;snapshot=null;addMessage('fault','Input unconfirmed','DDS did not return a confirming status. Wait for the connection to recover.');}
- if(pendingRefresh?.deadline&&performance.now()>=pendingRefresh.deadline){pendingRefresh=null;addMessage('warning','No battery reply','No new DCM battery packet arrived before the refresh timeout. The last known reading remains displayed.');}
+ if(wasOnline&&!connected()){wasOnline=false;addMessage('fault','Drone Deployment System connection lost','No current status from Heltec. Inputs are unavailable until a new snapshot arrives.');}
+ if(pendingInput?.deadline&&performance.now()>=pendingInput.deadline){pendingInput=null;snapshot=null;addMessage('fault','Input unconfirmed','Drone Deployment System did not return a confirming status. Wait for the connection to recover.');}
+ if(pendingRefresh?.deadline&&performance.now()>=pendingRefresh.deadline){pendingRefresh=null;addMessage('warning','No battery reply','No new Drone Communication Module battery packet arrived before the refresh timeout. The last known reading remains displayed.');}
  const fresh=ageMs()!==null&&ageMs()<=TELEMETRY_FRESH_MS;
- if(connected()&&previousFresh===true&&!fresh&&['ARMED','DEPLOYING','DEPLOYED'].includes(snapshot.state)){addMessage('warning','DCM updates stopped','The displayed packet age continues increasing. Stale sensor and GPS readings are hidden.');previousFresh=false;}
+ if(connected()&&previousFresh===true&&!fresh&&['ARMED','DEPLOYING','DEPLOYED'].includes(snapshot.state)){addMessage('warning','Drone Communication Module updates stopped','The displayed packet age continues increasing. Stale sensor and GPS readings are hidden.');previousFresh=false;}
  render();
 }
 
@@ -437,10 +462,12 @@ document.querySelectorAll("dialog").forEach(dialog=>dialog.addEventListener("cli
 
 $('#lockSwitch').onclick=()=>toggleInput('LOAD');
 $('#armSwitch').onclick=()=>toggleInput('ARM');
-$('#deploySwitch').onclick=()=>toggleInput('DEPLOY');
+$('#deploySwitch').onclick=()=>{if(!$('#deploySwitch').disabled)$('#deployConfirmDialog').showModal();};
+$('#cancelDeployButton').onclick=()=>$('#deployConfirmDialog').close();
+$('#confirmDeployButton').onclick=()=>{$('#deployConfirmDialog').close();if(!$('#deploySwitch').disabled)toggleInput('DEPLOY',true);};
 $('#refreshButton').onclick=requestRefresh;
 $('#endSleepButton').onclick=()=>stateAction('END');
 $('#ackButton').onclick=()=>stateAction('ACK');
-addMessage('info','Waiting for DDS','Connect to the Heltec Wi-Fi and open its local cockpit address. Inputs and readings appear only after actual status arrives.');
+addMessage('info','Waiting for Drone Deployment System','Connect to the Heltec Wi-Fi and open its local cockpit address. Inputs and readings appear only after actual status arrives.');
 render();pollStatus();setInterval(pollStatus,POLL_MS);setInterval(heartbeat,POLL_MS);
 )WEBJS";
