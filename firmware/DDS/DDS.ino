@@ -34,7 +34,7 @@
  *   UNLOCK -------(Unlock off, limit CLOSED)> LOCKING  [servo -> LOCK_POS]
  *   LOCKING ------(settled, in range)> STANDBY
  *   LOCKING ------(settled, out of range or no reply)> UNLOCK   [Unlock back on, LockFailStatus]
- *   STANDBY ------(Arm on, limit CLOSED, radio up)> ARMED   [send WAKE, start 15 s timer]
+ *   STANDBY ------(Arm on, limit CLOSED, radio + servo up)> ARMED  [send WAKE, start 15 s timer]
  *   ARMED --------(Arm off)---------> STANDBY          [send SLEEP]
  *   ARMED --------(software fault)--> SOFTWARE_ERROR   [send RESTART, start 1 min timer]
  *   ARMED --------(Deploy on, 15 s up)> DEPLOYING      [start 10 s timer]
@@ -84,8 +84,10 @@
  *   Jiggle: 3 small moves either side of RELEASE_POS (~ +/-100 counts, TBD), then back to RELEASE_POS.
  *
  * ---------------------------------------------------------------- SERIAL (115200)
- *   Every transition prints "FROM -> TO" and its action. The serial test stand-in
- *   (keys for the switches, the limit switch, WAKE/SLEEP) was removed on 2026-10-16.
+ *   Every transition prints "FROM -> TO" and its action, and a status line prints once a second.
+ *   Bench: keys in the monitor work alongside the web UI's controls (handy without a WiFi device).
+ *     u = Unlock toggle   a = Arm toggle   d = Deploy toggle
+ *     e = END/SLEEP       k = ACKNOWLEDGE FAILURE   b = CHECK BATTERY
  *
  * ---------------------------------------------------------------- OPEN ISSUES
  *   - Command collisions: the DCM is deaf for ~140 ms per second while it transmits, so a
@@ -189,6 +191,7 @@ constexpr uint32_t kMissWindowMs     = 10000;   // ARMED: missCounter restarts e
 constexpr int      kMaxMissed        = 3;       // ARMED: more than this many misses in one window = fault
 constexpr uint32_t kSoftwareErrorMs  = 60000;   // SOFTWARE_ERROR: wait this long, then STANDBY
 constexpr uint32_t kDeployTimeoutMs  = 10000;   // DEPLOYING: limit still CLOSED after this = DEPLOY_ERROR
+constexpr uint32_t kStatusPeriodMs   = 1000;    // bench: status line on the serial monitor
 
 enum State  {
     UNLOCK,
@@ -214,7 +217,7 @@ State state = STANDBY;
 uint32_t TimeStateEntered;
 SX1262 radio = new Module(RADIO_CS, RADIO_DIO1, RADIO_RST, RADIO_BUSY);
 SMS_STS servo;               // servo object
-bool servoUp = false;
+bool servoUp = false;        // ServoBegin() got a reply; if false, never arm (no way to release)
 bool     limitRaw      = false;   // last raw switch reading, before debounce
 uint32_t tLimitChanged = 0;       // millis() when limitRaw last changed
 bool radioUp = false;        // RadioBegin() succeeded; if false, never arm (no telemetry possible)
@@ -222,6 +225,7 @@ uint16_t cmdSeq = 0;         // command counter (header.seq on WAKE/SLEEP/RESTAR
 uint16_t lastSeq = 0;        // seq of the last valid frame, set by ReadPacket()
 int missCounter = 0;         // gaps in seq, counted by ReadPacket()
 uint32_t tMissWindow = 0;    // millis() when the missCounter window started
+uint32_t tLastStatus = 0;    // millis() when the last status line printed
 
 
 
@@ -373,7 +377,7 @@ void Standby(){
 
     if (UnlockCommand) StateChange(UNLOCK);
 
-    else if (ArmCommand && LimitClosed && radioUp) StateChange(ARMED);   // no radio = no telemetry: never arm
+    else if (ArmCommand && LimitClosed && radioUp && servoUp) StateChange(ARMED);   // no radio = no telemetry, no servo = no release: never arm
 
 }
 
@@ -591,6 +595,32 @@ int32_t ReadPacket(){
     lastSnr     = snr;
     return f.header.seq;
 }
+
+/** Bench: one line with everything the web UI would show. */
+void PrintStatus(){
+    Serial.printf("[%s] limit=%s unlock=%d arm=%d deploy=%d | armedLight=%d errorLight=%d deployed=%d deployFail=%d lockFail=%d"
+                  " | seq=%u miss=%d lastPkt=%lums ago | ok pmu=%d gnss=%d imu=%d mag=%d bme=%d | dcmBatt=%d%% rssi=%.0f | ddsBatt=%lumV\n",
+                  StateName(state), LimitClosed ? "CLOSED" : "OPEN", UnlockCommand, ArmCommand, DeployCommand,
+                  ArmedStatus, ErrorStatus, DeployStatus, DeployFailStatus, LockFailStatus,
+                  lastSeq, missCounter, (unsigned long)(millis() - tLastPacket),
+                  dcmPmuOk, dcmGnssOk, dcmImuOk, dcmMagOk, dcmBmeOk, dcmBattPct, lastRssi, (unsigned long)ddsBatteryMv);
+}
+
+/** Bench: a key typed in the serial monitor flips a switch or presses a command. */
+void ReadSerial(){
+    if (!Serial.available()) return;
+    switch (Serial.read()) {
+        case 'u': UnlockCommand = !UnlockCommand; break;
+        case 'a': ArmCommand    = !ArmCommand;    break;
+        case 'd': DeployCommand = !DeployCommand; break;
+        case 'e': EndCommand          = true; break;
+        case 'k': AckCommand          = true; break;
+        case 'b': CheckBatteryCommand = true; break;
+        default: return;   // anything else, including the newline
+    }
+    PrintStatus();
+}
+
 void setup() {
     PowerOn();
     Serial.begin(115200);
@@ -602,6 +632,11 @@ void loop() {
     ReadPacket();   // keeps the dcm* globals fresh in every state
     ReadLimitSwitch();    // keeps LimitClosed fresh in every state
     ddsBatteryMv = ReadBatteryMv();
+    ReadSerial();
+    if (millis() - tLastStatus >= kStatusPeriodMs) {
+        tLastStatus = millis();
+        PrintStatus();
+    }
 
     switch(state){
         case UNLOCK:         Unlock();        break;

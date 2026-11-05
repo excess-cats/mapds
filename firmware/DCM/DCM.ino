@@ -45,6 +45,10 @@
  *   TELEMETRY sent (~140 ms, the time on air). It no longer shows charging status.
  *   The Heltec (bench/heltec_rx) stands in for the DDS, or type a command
  *   letter in the monitor: w = WAKE, s = SLEEP, r = RESTART, b = CHECK_BATTERY.
+ *   Fault keys (toggle, cleared by a reboot), to test the DDS's software-fault checks:
+ *     i / m / e / p = report imuOk / magOk / bmeOk / pmuOk as false
+ *     x = don't send the next frame (seq still counts up, like a lost packet)
+ *     X = don't send every other frame
  *   On USB power the DCM skips light sleep (it loops awake in SLEEP), so the
  *   monitor stays connected. Measure sleep current on battery only.
  *
@@ -140,6 +144,14 @@ bool radioUp = false;
 
 uint32_t tLastSend = 0;
 uint16_t seq = 0;            // telemetry frame counter; restarts at 0 every boot
+
+// Bench fault keys (see BENCH above). Cleared by a reboot.
+bool fakeImuFail = false;
+bool fakeMagFail = false;
+bool fakeBmeFail = false;
+bool fakePmuFail = false;
+bool skipNext = false;       // don't send the next frame
+bool skipAlternate = false;  // don't send every other frame
 
 
 void PowerON(){
@@ -321,7 +333,10 @@ uint8_t ReadPacket(){
   return 0;
 }
 
-/** Bench only: a letter typed in the serial monitor (w, s, r, b) stands in for a DDS command. */
+/**
+ * Bench only: a letter typed in the serial monitor (w, s, r, b) stands in for a DDS command.
+ * The fault keys (i, m, e, p, x, X) flip a fault and return 0.
+ */
 uint8_t ReadSerial(){
   if (!Serial.available()) { return 0; }
   switch (Serial.read()) {
@@ -329,8 +344,17 @@ uint8_t ReadSerial(){
     case 's': return mapds::kMsgSleep;
     case 'r': return mapds::kMsgRestart;
     case 'b': return mapds::kMsgCheckBattery;
+    case 'i': fakeImuFail = !fakeImuFail; break;
+    case 'm': fakeMagFail = !fakeMagFail; break;
+    case 'e': fakeBmeFail = !fakeBmeFail; break;
+    case 'p': fakePmuFail = !fakePmuFail; break;
+    case 'x': skipNext = true; break;
+    case 'X': skipAlternate = !skipAlternate; break;
+    default: return 0;   // anything else, including the newline
   }
-  return 0;   // anything else, including the newline
+  Serial.printf("faults: imu=%d mag=%d bme=%d pmu=%d skipNext=%d skipAlternate=%d\n",
+                fakeImuFail, fakeMagFail, fakeBmeFail, fakePmuFail, skipNext, skipAlternate);
+  return 0;
 }
 
 /** A command from the radio, or failing that from the serial monitor. 0 = none. */
@@ -412,14 +436,19 @@ void Transmit(){
   float gyroDps[3];
   float magGauss[3];
   uint16_t battMv = power.getBattVoltage();   // 0 with no battery
-  bool imuOk = ReadIMU(accelMps2, gyroDps);
-  bool magOk = ReadMag(magGauss);
-  bool bmeOk = ReadBME(tempC, pressurePa, humidityPct);
+  bool imuOk = ReadIMU(accelMps2, gyroDps) && !fakeImuFail;
+  bool magOk = ReadMag(magGauss) && !fakeMagFail;
+  bool bmeOk = ReadBME(tempC, pressurePa, humidityPct) && !fakeBmeFail;
   bool GPSOk = ReadGPS(latDeg, lonDeg, gpsAltM, hdop);
-  mapds::TelemetryFrame frame = mapds::buildTelemetry(seq, pmuUp, GPSOk, imuOk, magOk, bmeOk, latDeg, lonDeg, gpsAltM, hdop, pressurePa, battMv, tempC, humidityPct, accelMps2, gyroDps, magGauss);
+  bool pmuOk = pmuUp && !fakePmuFail;
+  mapds::TelemetryFrame frame = mapds::buildTelemetry(seq, pmuOk, GPSOk, imuOk, magOk, bmeOk, latDeg, lonDeg, gpsAltM, hdop, pressurePa, battMv, tempC, humidityPct, accelMps2, gyroDps, magGauss);
   PrintFrame(frame);
 
-  if (radioUp) {
+  bool skip = skipNext || (skipAlternate && seq % 2 == 1);   // bench: act as if this frame was lost
+  skipNext = false;
+  if (skip) {
+    Serial.println("    (skipped: not sent)");
+  } else if (radioUp) {
     // The PMU's charge LED doubles as a TX light: lit while the packet is on air
     if (pmuUp) power.setChargingLedMode(XPOWERS_CHG_LED_ON);
     int16_t radio_status = radio.transmit(reinterpret_cast<uint8_t*>(&frame), sizeof(frame));
