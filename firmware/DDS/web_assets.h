@@ -247,18 +247,20 @@ const char WEB_INTERFACE_JS[] PROGMEM = R"WEBJS("use strict";
 // API status contains raw inputs, indicators and telemetry; POSTs set existing inputs.
 const $ = selector => document.querySelector(selector);
 const POLL_MS=1000, LINK_TIMEOUT_MS=3500, TELEMETRY_FRESH_MS=3500, REQUEST_TIMEOUT_MS=2500;
-const INPUTS={LOAD:'LoadCommand',ARM:'ArmCommand',DEPLOY:'DeployCommand'};
-const BUTTONS={LOAD:'lockSwitch',ARM:'armSwitch',DEPLOY:'deploySwitch'};
+const INPUTS={UNLOCK:'UnlockCommand',ARM:'ArmCommand',DEPLOY:'DeployCommand'};
+const BUTTONS={UNLOCK:'lockSwitch',ARM:'armSwitch',DEPLOY:'deploySwitch'};
 const history=[];
 let selectedMessage=null, nextMessageId=0;
 let snapshot=null, lastStatusAt=0, pollBusy=false, commandBusy=false;
 let pendingInput=null, pendingRefresh=null, gpsReceivedAt=null;
 let previousState=null, previousPresence=null, previousGps=null, previousFresh=null, wasOnline=false;
 let previousPacket=null;
+let previousLockFail=null;
 const statePalette = {
   OFFLINE:["#172127", "#9faeb7", "#080f0c", "#88a695"],
   STANDBY:["#FFFFFF", "#15232b", "#121c16", "#9ec4b0"],
-  LOAD:["#CFE4FF", "#15232b", "#14271d", "#9ec4b0"],
+  LOCKING:["#FFF7A1", "#15232b", "#292719", "#c4a36b"],
+  UNLOCK:["#CFE4FF", "#15232b", "#14271d", "#9ec4b0"],
   NOT_LOADED:["#FFDDA6", "#15232b", "#292719", "#c4a36b"],
   ARMED:["#FFF7A1", "#15232b", "#292719", "#c4a36b"],
   DEPLOYING:["#FFF7A1", "#15232b", "#292719", "#c4a36b"],
@@ -293,7 +295,7 @@ function renderTelemetry(t){
  $('#ddsVoltage').textContent=numberText(connected()&&snapshot.ddsBatteryMv>0?snapshot.ddsBatteryMv/1000:null,'V',2);
  const battery=snapshot?.telemetry;
  $('#dcmVoltage').textContent=numberText(connected()&&battery?.hasTelemetry===true&&battery.dcmPmuOk===true&&battery.dcmBattMv>0?battery.dcmBattMv/1000:null,'V',2);
- const active=connected()&&!['STANDBY','LOAD'].includes(snapshot.state);
+ const active=connected()&&!['STANDBY','UNLOCK','LOCKING'].includes(snapshot.state);
  for(const [id,key] of [['pmuValue','dcmPmuOk'],['imuValue','dcmImuOk'],['magHealthValue','dcmMagOk'],['bmeValue','dcmBmeOk']]){
   const value=t[key];$('#'+id).textContent=typeof value!=='boolean'?'NOT AVAILABLE':value?'OK':active?'FAULT':'OFF / NO DATA';
   $('#'+id).dataset.level=value===true?'good':value===false&&active?'fault':'';
@@ -322,8 +324,8 @@ function render(){
   else {button.dataset.state=state;button.disabled=false;}
   button.disabled=value===null||commandBusy||Boolean(pendingInput)||Boolean(pendingRefresh)||(command==='DEPLOY'&&value===true);
   button.setAttribute('aria-busy',String(pendingInput?.command===command));
-  const id=command==='LOAD'?'lockText':command==='ARM'?'armText':'deployText';
-  $('#'+id).textContent=command==='ARM'?'Arm/Disarm System':command==='DEPLOY'?'DEPLOY':value===null?'NOT AVAILABLE':value?'UNLOCKED':'LOCKED';
+  const id=command==='UNLOCK'?'lockText':command==='ARM'?'armText':'deployText';
+  $('#'+id).textContent=command==='ARM'?'Arm/Disarm System':command==='DEPLOY'?'DEPLOY':value===null?'NOT AVAILABLE':state==='LOCKING'?'LOCKING':state==='UNLOCK'?'UNLOCKED':'LOCKED';
  }
  const present=online&&typeof snapshot.dcmPresent==='boolean'?snapshot.dcmPresent:null;
  $('#attachmentText').textContent=present===null?'NOT AVAILABLE':present?'ATTACHED':'NOT ATTACHED';$('#presenceCell').dataset.attached=String(present===true);
@@ -374,13 +376,15 @@ function activateTab(tab) {
   }
 }
 function stateDescription(data){
- const descriptions={STANDBY:'Drone Deployment System reports STANDBY. Lock/Unlock controls its maintained LOAD input.',LOAD:'Drone Deployment System commands the loading position. Follow the existing loading sequence; attachment and LOAD OFF are interpreted by the firmware.',ARMED:'Drone Deployment System entered ARMED. The firmware controls the arming delay, checks, and permission to deploy.',SOFTWARE_ERROR:'The firmware detected a software fault and requested a Drone Communication Module restart. ARM OFF cancels automatic rearming.',DEPLOYING:'Drone Deployment System is commanding release and monitoring the physical attachment switch.',DEPLOY_ERROR:'The attachment switch remained closed after the deploy timeout. The firmware is attempting servo recovery.',DEPLOY_FAILURE:'The firmware reports unsuccessful release after recovery. Acknowledge the failure after inspection.',DEPLOYED:'Drone Deployment System detected separation. END / SLEEP requests the existing finish action.'};
+ const descriptions={STANDBY:'Drone Deployment System reports STANDBY. Lock/Unlock controls its maintained UNLOCK input.',UNLOCK:'The firmware commands the hook open. Presence and selecting Lock start its locking check.',LOCKING:'The firmware commands the hook closed, waits two seconds, then checks servo position. A failed check returns to UNLOCK.',ARMED:'Drone Deployment System entered ARMED. The firmware controls the arming delay, checks, and permission to deploy.',SOFTWARE_ERROR:'The firmware detected a software fault and requested a Drone Communication Module restart. ARM OFF cancels automatic rearming.',DEPLOYING:'Drone Deployment System is commanding release and monitoring the physical attachment switch.',DEPLOY_ERROR:'The attachment switch remained closed after the deploy timeout. The firmware is attempting servo recovery.',DEPLOY_FAILURE:'The firmware reports unsuccessful release after recovery. Acknowledge the failure after inspection.',DEPLOYED:'Drone Deployment System detected separation. END / SLEEP requests the existing finish action.'};
  return descriptions[data.state]||`Drone Deployment System reports state ${data.state}.`;
 }
 function applyStatus(data,requestStarted){
  if(!data||typeof data.state!=='string') throw new Error('Invalid status');
  const reconnected=!connected();snapshot=data;lastStatusAt=performance.now();wasOnline=true;
  if(reconnected)addMessage('success','Drone Deployment System connected','The browser is receiving live status from the Heltec. No sample values are used.');
+ const lockFailed=data.indicators?.LockFailStatus;
+ if(typeof lockFailed==='boolean'&&lockFailed!==previousLockFail){if(lockFailed)addMessage('fault','Lock failed','The firmware could not confirm the closed position. It returned to UNLOCK. Inspect the mechanism, then select Lock to retry.');else if(previousLockFail===true)addMessage('success','Lock check passed','The firmware cleared the previous lock failure after a successful position check.');previousLockFail=lockFailed;}
  if(previousState!==data.state){addMessage(['SOFTWARE_ERROR','DEPLOY_ERROR','DEPLOY_FAILURE'].includes(data.state)?'fault':'success',data.state.replaceAll('_',' '),stateDescription(data));previousState=data.state;}
  const t=data.telemetry||{},fresh=t.hasTelemetry===true&&Number.isFinite(t.ageMs)&&t.ageMs<=TELEMETRY_FRESH_MS;
  const packetKey=t.hasTelemetry===true?`${t.lastTelemetrySeq}:${Math.round(lastStatusAt-t.ageMs)}`:null;
@@ -412,7 +416,7 @@ async function toggleInput(command,requestedValue){
  const target=typeof requestedValue==='boolean'?requestedValue:!current;
  if(target===current)return;
  commandBusy=true;pendingInput={command,value:target,acceptedAt:null};render();
- addMessage('input',`${command==='LOAD'?(target?'Unlock':'Lock'):command+' '+(target?'ON':'OFF')} requested`,'Operator input submitted. This does not confirm physical movement or a successful state transition.');
+ addMessage('input',`${command==='UNLOCK'?(target?'Unlock':'Lock'):command+' '+(target?'ON':'OFF')} requested`,'Operator input submitted. This does not confirm physical movement or a successful state transition.');
  try{const result=await postCommand(command,target);if(!result.ok){pendingInput=null;addMessage('warning','Request rejected',result.message||'Drone Deployment System did not accept the input.');}else{pendingInput.acceptedAt=performance.now();pendingInput.deadline=performance.now()+LINK_TIMEOUT_MS;}}catch(_){pendingInput=null;snapshot=null;addMessage('fault','Input unconfirmed','The response was lost. Waiting for a fresh Drone Deployment System snapshot before another request; no automatic retry is sent.');}finally{commandBusy=false;render();pollStatus();}
 }
 async function requestRefresh(){
@@ -460,7 +464,7 @@ document.querySelectorAll("dialog").forEach(dialog=>dialog.addEventListener("cli
   if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom) dialog.close();
 }));
 
-$('#lockSwitch').onclick=()=>toggleInput('LOAD');
+$('#lockSwitch').onclick=()=>toggleInput('UNLOCK');
 $('#armSwitch').onclick=()=>toggleInput('ARM');
 $('#deploySwitch').onclick=()=>{if(!$('#deploySwitch').disabled)$('#deployConfirmDialog').showModal();};
 $('#cancelDeployButton').onclick=()=>$('#deployConfirmDialog').close();

@@ -10,15 +10,15 @@
  * and read the state and lights. Until then, the serial monitor stands in.
  *
  * ---------------------------------------------------------------- STATES
- *   LOAD, STANDBY, ARMED, SOFTWARE_ERROR,
+ *   UNLOCK, LOCKING, STANDBY, ARMED, SOFTWARE_ERROR,
  *   DEPLOYING, DEPLOYED, DEPLOY_ERROR, DEPLOY_FAILURE
  *
  *   Boot in STANDBY. FSM v3's NOT_LOADED is cut: STANDBY with the limit switch OPEN
  *   covers it (no arming without a drone).
  *
  * ---------------------------------------------------------------- INPUTS
- *   Switches (levels: stay on until turned off)  Load, Arm, Deploy
- *   Commands (one-shot: cleared on every state change)  END/SLEEP, ACKNOWLEDGE FAILURE
+ *   Switches (levels: stay on until turned off)  Unlock (LOCK/UNLOCK toggle, on = unlock), Arm, Deploy
+ *   Commands (one-shot: cleared on every state change)  END/SLEEP, ACKNOWLEDGE FAILURE, CHECK BATTERY
  *   Limit switch                                  CLOSED = drone present, OPEN = gone
  *   Software fault                                computed from telemetry (below)
  *
@@ -26,10 +26,14 @@
  *   Deploy would re-arm and re-fire straight out of Standby.
  *   Deploy only counts if it is turned on after the Armed light: ARMED turns it off until then.
  *   Clearing END/ACK on every state change means one pressed in another state can't fire later.
+ *   CHECK BATTERY only counts in UNLOCK and STANDBY (DCM asleep): send CHECK_BATTERY, and the
+ *   DCM replies with battery-only TELEMETRY that updates dcmBattMv and dcmBattPct.
  *
  * ---------------------------------------------------------------- FSM
- *   STANDBY ------(Load on)---------> LOAD
- *   LOAD ---------(Load off)--------> STANDBY
+ *   STANDBY ------(Unlock on)-------> UNLOCK
+ *   UNLOCK -------(Unlock off, limit CLOSED)> LOCKING  [servo -> LOCK_POS]
+ *   LOCKING ------(settled, in range)> STANDBY
+ *   LOCKING ------(settled, out of range or no reply)> UNLOCK   [Unlock back on, LockFailStatus]
  *   STANDBY ------(Arm on, limit CLOSED, radio up)> ARMED   [send WAKE, start 15 s timer]
  *   ARMED --------(Arm off)---------> STANDBY          [send SLEEP]
  *   ARMED --------(software fault)--> SOFTWARE_ERROR   [send RESTART, start 1 min timer]
@@ -44,6 +48,8 @@
  *   DEPLOY_FAILURE (ACK)------------> STANDBY          [send SLEEP, switches off]
  *
  *   Ignore any input that has no arrow out of the current state (e.g. Deploy in STANDBY).
+ *   LOCKING always finishes its check: the limit switch or Unlock changing during it is ignored.
+ *   A failed lock turns Unlock back on, so it doesn't retry by itself: the operator turns it off to try again.
  *   DEPLOYED -> STANDBY lands with the limit switch OPEN, so Arm is refused until a drone is loaded.
  *   Every timer is "time since the transition that started it": save millis() once, on the arrow.
  *
@@ -51,8 +57,9 @@
  *   Armed light    ARMED and the 15 s timer is up (that is also when Deploy is allowed)
  *   Error light    SOFTWARE_ERROR, DEPLOY_ERROR, DEPLOY_FAILURE
  *   Status         DEPLOYED = success, DEPLOY_FAILURE = failure
+ *   Lock failed    LockFailStatus: set when LOCKING fails, cleared by the next good lock
  *   DDS battery    ddsBatteryMv, the Heltec's own LiPo
- *   Warnings       no GPS fix (gnssOk false), DCM battery < 20 % (battPct -1 = on USB, no warning)
+ *   Warnings       no GPS fix (gnssOk false), DCM battery < 20 % (dcmBattPct -1 = on USB, no warning)
  *                  Shown only. They never cause a transition.
  *
  * ---------------------------------------------------------------- SOFTWARE FAULT (checked in ARMED only, once the 15 s are up)
@@ -72,7 +79,8 @@
  *             st.WritePosEx(id, position, speed, acc)   move (returns at once; the servo moves on its own)
  *             st.Ping(id)                                -1 = no reply (check at boot)
  *             st.ReadPos(id)                             current position (useful for the jiggle)
- *   LOAD_POS, LOCK_POS, RELEASE_POS: TBD on the bench.
+ *   UNLOCK_POS, LOCK_POS, RELEASE_POS: TBD on the bench.
+ *   Lock check: kLockSettleMs after entering LOCKING, ReadPos must be within kLockTolerance of LOCK_POS.
  *   Jiggle: 3 small moves either side of RELEASE_POS (~ +/-100 counts, TBD), then back to RELEASE_POS.
  *
  * ---------------------------------------------------------------- SERIAL (115200)
@@ -122,9 +130,6 @@
 #include <SPI.h>
 #include <RadioLib.h>   // SX1262
 #include <SCServo.h>    // Feetech ST3215 bus servo (SMS_STS class)
-#include <WiFi.h>
-#include <WebServer.h> // bundled with the ESP32 board package
-#include "web_assets.h"
 
 #include "../shared/protocol.h"
 
@@ -153,6 +158,8 @@ constexpr int      kAdcCtrlOn   = HIGH;   // V3.4: HIGH confirmed on the bench; 
 constexpr int8_t   kTxPowerDbm  = 14;     // bench value; flight value TBD
 constexpr float    kTcxoVolts   = 1.8f;
 constexpr uint32_t kLimitDebounceMs = 20; // switch must hold a level this long before it counts
+constexpr uint16_t kDcmBattEmptyMv  = 3200; // DCM 18650: 0 %. Little charge left below this (PMU cuts at 3000)
+constexpr uint16_t kDcmBattFullMv   = 4200; // DCM 18650: 100 %
 
 // SERVO SETTINGS
 
@@ -161,7 +168,7 @@ constexpr uint8_t  kServoId     = 1;      // factory default
 
 // Servo positions: 0-4095 = 360 deg, 2047 = centre.
 // VALUES SUBJECT TO CHANGE 
-constexpr int16_t  LOAD_POS     = 0;   // hook open, drone can be hooked on
+constexpr int16_t  UNLOCK_POS   = 0;   // hook open, drone can be hooked on
 constexpr int16_t  LOCK_POS     = 2047;   // hook closed, drone held
 constexpr int16_t  RELEASE_POS  = 0;   // hook open, drone falls free
 constexpr uint16_t kServoSpeed  = 1500;   // steps/s (50 ~ 0.73 RPM, max ~3073)
@@ -169,12 +176,14 @@ constexpr uint8_t  kServoAcc    = 50;     // 0-150, lower = gentler (unit undocu
 constexpr int16_t  kJiggleDistance = 100;   // distance each side of RELEASE_POS, TBD
 constexpr int      kJiggleTimes  = 3;
 constexpr uint32_t kJiggleStepMs = 200;   // time allowed per move before the next one, TBD
+constexpr int16_t  kLockTolerance = 50;   // LOCKING: ReadPos must be within this many counts of LOCK_POS, TBD
 
 // END SERVO SETTINGS
 
 // FSM TIMING
 
-constexpr uint32_t kArmDelayMs       = 15000;   // ARMED: no faults or Deploy until this is up, then the Armed light
+constexpr uint32_t kLockSettleMs     = 2000;    // LOCKING: wait this long for the servo, then read its position, TBD
+constexpr uint32_t kArmDelayMs      = 15000;   // ARMED: no faults or Deploy until this is up, then the Armed light
 constexpr uint32_t kNoPacketMs       = 10000;   // ARMED: no telemetry for this long = fault
 constexpr uint32_t kMissWindowMs     = 10000;   // ARMED: missCounter restarts every window
 constexpr int      kMaxMissed        = 3;       // ARMED: more than this many misses in one window = fault
@@ -182,7 +191,8 @@ constexpr uint32_t kSoftwareErrorMs  = 60000;   // SOFTWARE_ERROR: wait this lon
 constexpr uint32_t kDeployTimeoutMs  = 10000;   // DEPLOYING: limit still CLOSED after this = DEPLOY_ERROR
 
 enum State  {
-    LOAD,
+    UNLOCK,
+    LOCKING,
     STANDBY,
     ARMED,
     SOFTWARE_ERROR,
@@ -194,9 +204,9 @@ enum State  {
 
 // Commands to the DCM. The values are the protocol's message IDs, so Transmit() can put them straight in the header.
 enum class Command : uint8_t {
-    WAKE    = mapds::kMsgWake,
-    SLEEP   = mapds::kMsgSleep,
-    RESTART = mapds::kMsgRestart,
+    WAKE          = mapds::kMsgWake,
+    SLEEP         = mapds::kMsgSleep,
+    RESTART       = mapds::kMsgRestart,
     CHECK_BATTERY = mapds::kMsgCheckBattery
 };
 
@@ -208,7 +218,7 @@ bool servoUp = false;
 bool     limitRaw      = false;   // last raw switch reading, before debounce
 uint32_t tLimitChanged = 0;       // millis() when limitRaw last changed
 bool radioUp = false;        // RadioBegin() succeeded; if false, never arm (no telemetry possible)
-uint16_t cmdSeq = 0;         // command counter (header.seq on WAKE/SLEEP/RESTART)
+uint16_t cmdSeq = 0;         // command counter (header.seq on WAKE/SLEEP/RESTART/CHECK_BATTERY)
 uint16_t lastSeq = 0;        // seq of the last valid frame, set by ReadPacket()
 int missCounter = 0;         // gaps in seq, counted by ReadPacket()
 uint32_t tMissWindow = 0;    // millis() when the missCounter window started
@@ -227,7 +237,8 @@ double   dcmLonDeg      = 0;
 float    dcmGpsAltM     = 0;       // m above sea level
 float    dcmHdop        = 0;       // lower is better (~1 good, >5 poor)
 float    dcmPressurePa  = 0;
-uint16_t dcmBattMv      = 0;       // battery voltage from the current protocol, 0 = unavailable
+uint16_t dcmBattMv      = 0;       // mV, or 0 with no battery
+int8_t   dcmBattPct     = -1;      // 0-100, or -1 with no battery. From dcmBattMv, by UpdateDcmBattPct()
 float    dcmTempC       = 0;
 float    dcmHumidityPct = 0;
 float    dcmAccelMps2[3] = {};     // x, y, z
@@ -237,15 +248,17 @@ uint32_t tLastPacket = 0;    // millis() when the last valid frame arrived
 float    lastRssi    = 0;    // dBm, of the last valid frame
 float    lastSnr     = 0;    // dB
 
-bool LoadCommand = false;
+bool UnlockCommand = false;     // LOCK/UNLOCK toggle: true = unlock
 bool ArmCommand = false;
 bool DeployCommand = false;
+bool CheckBatteryCommand = false;
 bool EndCommand = false;    
 bool AckCommand = false;    
 bool ArmedStatus = false;       // Armed light: ARMED and the 15 s are up (Deploy allowed)
 bool ErrorStatus = false;       // Error light: SOFTWARE_ERROR, DEPLOY_ERROR, DEPLOY_FAILURE
 bool DeployStatus = false;      // status: DEPLOYED (success)
 bool DeployFailStatus = false;  // status: DEPLOY_FAILURE
+bool LockFailStatus = false;    // LOCKING failed; cleared by the next good lock
 
 uint32_t ddsBatteryMv = 0;      // DDS LiPo voltage, read every loop
 
@@ -255,22 +268,13 @@ bool LimitClosed = false;     // true = drone present. Debounced, updated by Rea
 
 
 
-// BEGIN: Web connection settings.
-constexpr char kDdsWifiSsid[] = "DDI_MAPDS";
-constexpr char kDdsWifiPassword[] = "12345678";
-WebServer cockpitServer(80);
-bool webServerUp = false, webHasTelemetry = false, webResetPending = false;
-uint32_t tWebResetRequested = 0;
-// END: Web connection settings.
-
-
-
 
 
 /** Name of a state, for serial prints. */
 const char* StateName(State s){
     switch(s){
-        case LOAD:           return "LOAD";
+        case UNLOCK:         return "UNLOCK";
+        case LOCKING:        return "LOCKING";
         case STANDBY:        return "STANDBY";
         case ARMED:          return "ARMED";
         case SOFTWARE_ERROR: return "SOFTWARE_ERROR";
@@ -287,18 +291,22 @@ void UpdateState(State to){
     Serial.printf("%s -> %s\n", StateName(state), StateName(to));
     state = to;
     TimeStateEntered = millis();
-    EndCommand = AckCommand = false;   // one-shot commands only count in the state they're pressed in
+    EndCommand = AckCommand = CheckBatteryCommand = false;   // one-shot commands only count in the state they're pressed in
 }
 
 bool StateChange(State to){
     State from = state;
     switch(from){
         case STANDBY:
-            if(to == LOAD)       { UpdateState(to); Serial.println("  [servo -> LOAD_POS]"); return true; }
+            if(to == UNLOCK)     { UpdateState(to); Serial.println("  [servo -> UNLOCK_POS]"); return true; }
             if(to == ARMED)    { UpdateState(to); Serial.println("  [send WAKE]"); Transmit(Command::WAKE); return true; }
             break;
-        case LOAD:
-            if(to == STANDBY)    { UpdateState(to); Serial.println("  [servo -> LOCK_POS]"); return true; }
+        case UNLOCK:
+            if(to == LOCKING)    { UpdateState(to); Serial.println("  [servo -> LOCK_POS]"); return true; }
+            break;
+        case LOCKING:
+            if(to == STANDBY)    { UpdateState(to); return true; }
+            if(to == UNLOCK)     { UpdateState(to); Serial.println("  [servo -> UNLOCK_POS]"); return true; }
             break;
         case ARMED:
             if(to == STANDBY)        { UpdateState(to); Serial.println("  [send SLEEP]"); Transmit(Command::SLEEP); return true; }
@@ -327,16 +335,43 @@ bool StateChange(State to){
     return false;
 }
 
+/** CHECK BATTERY button: asks the sleeping DCM for its battery level. One-shot, so clear it once sent. */
+void CheckBattery(){
+    if (!CheckBatteryCommand) return;
+    CheckBatteryCommand = false;
+    Serial.println("  [send CHECK_BATTERY]");
+    Transmit(Command::CHECK_BATTERY);
+}
+
 // STATES
-void Load(){
-    servo.WritePosEx(kServoId, LOAD_POS, kServoSpeed, kServoAcc);
-    if (!LoadCommand && LimitClosed) StateChange(STANDBY);
+void Unlock(){
+    servo.WritePosEx(kServoId, UNLOCK_POS, kServoSpeed, kServoAcc);
+    CheckBattery();
+    if (!UnlockCommand && LimitClosed) StateChange(LOCKING);
+}
+
+void Locking(){
+    // exits: settle time up, in range -> STANDBY; out of range or no reply -> UNLOCK
+    servo.WritePosEx(kServoId, LOCK_POS, kServoSpeed, kServoAcc);
+    if (millis() - TimeStateEntered < kLockSettleMs) return;
+
+    int pos = servo.ReadPos(kServoId);   // -1 = no reply
+    if (pos != -1 && abs(pos - LOCK_POS) <= kLockTolerance) {
+        LockFailStatus = false;
+        StateChange(STANDBY);
+    } else {
+        Serial.printf("  [lock failed: pos %d]\n", pos);
+        LockFailStatus = true;
+        UnlockCommand = true;            // toggle back to UNLOCK, so it doesn't retry by itself
+        StateChange(UNLOCK);
+    }
 }
 
 void Standby(){
     servo.WritePosEx(kServoId, LOCK_POS, kServoSpeed, kServoAcc);
+    CheckBattery();
 
-    if (LoadCommand) StateChange(LOAD);
+    if (UnlockCommand) StateChange(UNLOCK);
 
     else if (ArmCommand && LimitClosed && radioUp) StateChange(ARMED);   // no radio = no telemetry: never arm
 
@@ -413,7 +448,7 @@ void Deployed(){
     // exits: END/SLEEP -> STANDBY
     DeployStatus = true;
     if (EndCommand) {                                        // cleared by UpdateState()
-        LoadCommand = ArmCommand = DeployCommand = false;    // switches off, so STANDBY doesn't re-arm and re-fire
+        UnlockCommand = ArmCommand = DeployCommand = false;    // switches off, so STANDBY doesn't re-arm and re-fire
         DeployStatus = false;
         StateChange(STANDBY);
     }
@@ -424,7 +459,7 @@ void DeployFailure(){
     DeployFailStatus = true;
     ErrorStatus = true;
     if (AckCommand) {                                        // cleared by UpdateState()
-        LoadCommand = ArmCommand = DeployCommand = false;    // switches off, so STANDBY doesn't re-arm and re-fire
+        UnlockCommand = ArmCommand = DeployCommand = false;    // switches off, so STANDBY doesn't re-arm and re-fire
         DeployFailStatus = false;
         ErrorStatus = false;
         StateChange(STANDBY);
@@ -448,6 +483,13 @@ void PowerOn(){
 
 uint32_t ReadBatteryMv(){
     return analogReadMilliVolts(VBAT_PIN) * 49 / 10;   // undo the 390k/100k divider (x4.9)
+}
+
+/** Sets dcmBattPct from dcmBattMv: a straight line from kDcmBattEmptyMv (0 %) to kDcmBattFullMv (100 %). */
+void UpdateDcmBattPct(){
+    if (dcmBattMv == 0) { dcmBattPct = -1; return; }   // no battery (on USB)
+    int32_t pct = (int32_t(dcmBattMv) - kDcmBattEmptyMv) * 100 / (kDcmBattFullMv - kDcmBattEmptyMv);
+    dcmBattPct = constrain(pct, 0, 100);
 }
 
 /** Debounced read of the limit switch into LimitClosed. Call every loop. */
@@ -541,6 +583,7 @@ int32_t ReadPacket(){
         dcmGyroDps[i]   = f.gyroDps[i];
         dcmMagGauss[i]  = f.magGauss[i];
     }
+    UpdateDcmBattPct();
     if (f.header.seq != lastSeq + 1) missCounter++;
     lastSeq = f.header.seq;
     tLastPacket = millis();
@@ -549,53 +592,35 @@ int32_t ReadPacket(){
     return f.header.seq;
 }
 // -------------------------- WEB VARIABLE BRIDGE --------------------------
+// Web adapter only. Bundled ESP32 libraries; no extra web-server dependency.
+#include <WiFi.h>
+#include <WebServer.h>
+#include "web_assets.h"
+
+constexpr char kDdsWifiSsid[] = "DDI_MAPDS";
+constexpr char kDdsWifiPassword[] = "12345678";
+WebServer cockpitServer(80);
+bool webServerUp = false;
+bool webHasTelemetry = false;
+bool webResetPending = false;
+uint32_t tWebResetRequested = 0;
+
 
 // ---------------------------------------------------------------- BATTERY DISPLAY
-// DDS: keep the existing single-cell 3.7 V LiPo conversion.
-// DCM: ZEUS PCIFR18650-1500, one 3.2 V / 1500 mAh LiFePO4 cell.
-// These percentages are for the cockpit only. They never drive the FSM or PMU.
-// DCM sends millivolts, not remaining capacity or remaining flight time.
-//
-// ZEUS specifies 3.65 +/- 0.03 V charge and 2.0 V discharge cutoff:
-// www.zeusbatteryproducts.com/wp-content/uploads/downloads/ZEUS_LIFEPO4_PCIFR18650-1500_SPEC_SHEET.pdf
-// It does not publish a voltage/SOC table. The DCM points below are an initial
-// LiFePO4 approximation using TI SLUAAR1, Tables 2-1/2-2 and Figure 2-3:
-// www.ti.com/lit/an/sluaar1/sluaar1.pdf
-// Rounded reference points are NOT measurements of this ZEUS cell. Load,
-// temperature and charging shift the reading, especially on its flat plateau.
-// Check against a measured discharge run; replace this profile when DCM's cell changes.
-// The DCM currently sets system power-down to 3.0 V. That is a separate hardware
-// setting, not the cell's 2.0 V cutoff; this bridge changes neither setting.
-
-// Find the two surrounding voltage points, then interpolate a whole percent.
-// Bounded table walk only: no sensor queries, UART reads, radio waits or delays.
-int WebBatteryInterpolate(uint32_t mv, const uint16_t* volts,
-                          const uint8_t* percent, unsigned int count){
-    if (mv <= volts[0]) return percent[0];
-    for (unsigned int i = 1; i < count; ++i) {
-        if (mv > volts[i]) continue;
-        const uint32_t spanMv = volts[i] - volts[i - 1];
-        const uint32_t risePct = percent[i] - percent[i - 1];
-        const uint32_t offsetMv = mv - volts[i - 1];
-        return percent[i - 1] + (offsetMv * risePct + spanMv / 2) / spanMv;
-    }
-    return percent[count - 1];
-}
-
+// DDS is the Heltec's single-cell 3.7 V LiPo. Its existing voltage reader
+// belongs to the automation; the bridge never reads the ADC a second time.
+// DDS percentage: the same straight-line calculation used by UpdateDcmBattPct().
+// 3200 mV -> 0%, 4200 mV -> 100%; values outside that span are clamped.
 int WebBatteryPercent(uint32_t mv){
-    if (mv < 2500 || mv > 4350) return -1; // DDS: no usable reading
-    static const uint16_t volts[] = {3000,3300,3500,3600,3700,3750,3800,3850,3900,3950,4000,4100,4200};
-    static const uint8_t percent[] = {0,2,5,10,20,30,40,50,60,70,80,90,100};
-    return WebBatteryInterpolate(mv, volts, percent, sizeof(volts) / sizeof(volts[0]));
-}
-
-int WebDcmBatteryPercent(uint32_t mv){
-    // Zero means absent. Above 3.70 V is outside this cell profile (including
-    // a small measurement margin); show unavailable instead of a false 100%.
-    if (mv == 0 || mv > 3700) return -1;
-    static const uint16_t volts[] = {2000,3000,3096,3197,3263,3297,3330,3393,3503,3576,3612,3650};
-    static const uint8_t percent[] = {0,3,7,13,31,59,80,88,93,97,98,100};
-    return WebBatteryInterpolate(mv, volts, percent, sizeof(volts) / sizeof(volts[0]));
+    constexpr uint16_t kDdsBattEmptyMv = 3200;
+    constexpr uint16_t kDdsBattFullMv = 4200;
+    if (mv == 0) return -1; // no voltage reading: display unavailable
+    // Clamp first so subtraction cannot wrap or overflow on an invalid input.
+    if (mv <= kDdsBattEmptyMv) return 0;
+    if (mv >= kDdsBattFullMv) return 100;
+    const int32_t pct = (int32_t(mv) - kDdsBattEmptyMv) * 100 /
+                        (kDdsBattFullMv - kDdsBattEmptyMv);
+    return constrain(pct, 0, 100);
 }
 
 // ---------------------------------------------------------------- JSON HELPERS
@@ -625,15 +650,17 @@ void CockpitStatus(){
     WebNumber(json, "ddsBatteryPct", WebBatteryPercent(ddsBatteryMv), 0);
     WebNumber(json, "ddsBatteryMv", ddsBatteryMv, 0); WebNumber(json, "stateAgeMs", millis() - TimeStateEntered, 0);
     WebNumber(json, "missCounter", missCounter, 0);
+    WebNumber(json, "lockSettleMs", kLockSettleMs, 0);
     // Send the firmware timer settings; the browser uses them for the countdown.
     json += ",\"limits\":{\"armDelayMs\":"; json += String(kArmDelayMs);
     WebNumber(json, "noPacketMs", kNoPacketMs, 0); WebNumber(json, "maxMissed", kMaxMissed, 0);
     WebNumber(json, "softwareErrorMs", kSoftwareErrorMs, 0); json += '}';
     // Raw operator inputs and firmware indicators are separate from FSM state.
-    json += ",\"inputs\":{\"LoadCommand\":"; json += LoadCommand ? "true" : "false";
+    json += ",\"inputs\":{\"UnlockCommand\":"; json += UnlockCommand ? "true" : "false";
     WebFlag(json, "ArmCommand", ArmCommand); WebFlag(json, "DeployCommand", DeployCommand); json += '}';
     json += ",\"indicators\":{\"ArmedStatus\":"; json += ArmedStatus ? "true" : "false";
-    WebFlag(json, "ErrorStatus", ErrorStatus); WebFlag(json, "DeployStatus", DeployStatus); WebFlag(json, "DeployFailStatus", DeployFailStatus); json += '}';
+    WebFlag(json, "ErrorStatus", ErrorStatus); WebFlag(json, "DeployStatus", DeployStatus); WebFlag(json, "DeployFailStatus", DeployFailStatus);
+    WebFlag(json, "LockFailStatus", LockFailStatus); json += '}';
     // Last received packet only. A status request does not wake or poll the DCM.
     json += ",\"telemetry\":{\"hasTelemetry\":"; json += webHasTelemetry ? "true" : "false";
     WebNumber(json, "ageMs", millis() - tLastPacket, 0); WebNumber(json, "lastTelemetrySeq", lastSeq, 0);
@@ -643,7 +670,7 @@ void CockpitStatus(){
     WebNumber(json, "dcmGpsAltM", dcmGpsAltM, 1); WebNumber(json, "dcmHdop", dcmHdop, 2);
     // Keep raw millivolts available in telemetry; only the display percent is estimated.
     WebNumber(json, "dcmBattMv", dcmBattMv, 0);
-    WebNumber(json, "dcmBattPct", webHasTelemetry && dcmPmuOk ? WebDcmBatteryPercent(dcmBattMv) : -1, 0);
+    WebNumber(json, "dcmBattPct", webHasTelemetry && dcmPmuOk ? dcmBattPct : -1, 0);
     WebNumber(json, "dcmTempC", dcmTempC, 1);
     WebNumber(json, "dcmHumidityPct", dcmHumidityPct, 1); WebNumber(json, "dcmPressurePa", dcmPressurePa, 1);
     WebVector(json, "dcmAccelMps2", dcmAccelMps2); WebVector(json, "dcmGyroDps", dcmGyroDps); WebVector(json, "dcmMagGauss", dcmMagGauss);
@@ -655,13 +682,13 @@ void CockpitStatus(){
 // No servo positions, arming rules or state transitions are implemented here.
 void CockpitCommand(){
     const String command = cockpitServer.arg("command"), value = cockpitServer.arg("value");
-    bool* input = command == "LOAD" ? &LoadCommand : command == "ARM" ? &ArmCommand : command == "DEPLOY" ? &DeployCommand : nullptr;
+    bool* input = command == "UNLOCK" ? &UnlockCommand : command == "ARM" ? &ArmCommand : command == "DEPLOY" ? &DeployCommand : nullptr;
     if (input && (value == "true" || value == "false")) *input = value == "true";
     else if (command == "CHECK_BATTERY") {
         // Sleeping DCM: request its existing battery-only reply.
         // Active operation: use normal incoming telemetry rather than interrupt it.
-        const bool request = state == STANDBY || state == LOAD;
-        if (request && !Transmit(Command::CHECK_BATTERY)) { cockpitServer.send(503, "application/json", "{\"ok\":false,\"message\":\"Battery request could not be transmitted.\"}"); return; }
+        const bool request = state == STANDBY || state == UNLOCK;
+        if (request) CheckBatteryCommand = true; // her FSM consumes and transmits this request
         cockpitServer.send(202, "application/json", request ? "{\"ok\":true,\"requested\":true}" : "{\"ok\":true,\"requested\":false}"); return;
     }
     else if (command == "END") EndCommand = true; // existing Deployed() handles it
@@ -707,7 +734,7 @@ void setup() {
     Serial.begin(115200);
     radioUp = RadioBegin();
     servoUp = ServoBegin();
-    StartCockpitServer();
+    StartCockpitServer(); // web adapter startup
 }
 
 void loop() {
@@ -716,7 +743,8 @@ void loop() {
     ddsBatteryMv = ReadBatteryMv();
 
     switch(state){
-        case LOAD:           Load();          break;
+        case UNLOCK:         Unlock();        break;
+        case LOCKING:        Locking();       break;
         case STANDBY:        Standby();       break;
         case ARMED:          Armed();         break;
         case SOFTWARE_ERROR: SoftwareError(); break;
@@ -725,5 +753,5 @@ void loop() {
         case DEPLOYED:       Deployed();      break;
         case DEPLOY_FAILURE: DeployFailure(); break;
     }
-    ServiceCockpit();
+    ServiceCockpit(); // web adapter; FSM has already run this pass
 }
