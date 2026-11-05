@@ -170,9 +170,9 @@ constexpr uint8_t  kServoId     = 1;      // factory default
 
 // Servo positions: 0-4095 = 360 deg, 2047 = centre.
 // VALUES SUBJECT TO CHANGE 
-constexpr int16_t  UNLOCK_POS   = 2047;   // hook open, drone can be hooked on
-constexpr int16_t  LOCK_POS     = 0;   // hook closed, drone held
-constexpr int16_t  RELEASE_POS  = 2047;   // hook open, drone falls free
+constexpr int16_t  UNLOCK_POS   = 0;   // hook open, drone can be hooked on
+constexpr int16_t  LOCK_POS     = 2047;   // hook closed, drone held
+constexpr int16_t  RELEASE_POS  = 0;   // hook open, drone falls free
 constexpr uint16_t kServoSpeed  = 1500;   // steps/s (50 ~ 0.73 RPM, max ~3073)
 constexpr uint8_t  kServoAcc    = 50;     // 0-150, lower = gentler (unit undocumented)
 constexpr int16_t  kJiggleDistance = 100;   // distance each side of RELEASE_POS, TBD
