@@ -12,12 +12,13 @@ constexpr uint8_t kPairId = 0x01;  // unique per DDS/DCM pair
 
 // ---- Radio (both ends must match) ----
 constexpr float    kFreqMHz          = 915.0f;
-constexpr float    kBandwidthKHz     = 125.0f;
-constexpr uint8_t  kSpreadingFactor  = 12;
-constexpr uint8_t  kCodingRate       = 5;     // 4/5
+constexpr float    kBandwidthKHz     = 500.0f;  // >= 500 kHz: FCC 15.247 digital modulation, single channel OK (no hopping/dwell limit)
+constexpr uint8_t  kSpreadingFactor  = 12;      // 83 B TELEMETRY ~0.74 s on air at SF12/BW500
+constexpr uint8_t  kCodingRate       = 5;       // 4/5
 constexpr uint8_t  kSyncWord         = 0x12;
-constexpr uint16_t kPreamble         = 16;    // symbols
-constexpr int8_t   kTxPowerDbm       = 22;    // bench value; flight value TBD. Heltec V3 max 21 dBm
+constexpr uint16_t kPreamble         = 8;       // symbols; DCM receives continuously, so no long preamble needed
+constexpr int8_t   kTxPowerDbm       = 22;      // SX1262 max. 15.247 allows 30 dBm conducted, antenna up to 6 dBi
+constexpr float    kCurrentLimitMa   = 140.0f;  // RadioLib begin() sets 60 mA, which clips 22 dBm (~118 mA needed)
 
 // ---- Message IDs (header byte 0) ----
 constexpr uint8_t kMsgTelemetry    = 1;  // DCM -> DDS

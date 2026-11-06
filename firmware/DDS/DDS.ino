@@ -90,9 +90,10 @@
  *     e = END/SLEEP       k = ACKNOWLEDGE FAILURE   b = CHECK BATTERY
  *
  * ---------------------------------------------------------------- OPEN ISSUES
- *   - Command collisions: the DCM is deaf for ~140 ms per second while it transmits, so a
- *     SLEEP or RESTART can be lost. Options: send copies ~200 ms apart; send right after
- *     a received frame; or resend SLEEP while frames keep arriving in a "should be asleep" state.
+ *   - Command collisions: the DCM is deaf for ~0.74 s of every ~1.74 s cycle while it transmits
+ *     (83 B at SF12/BW500, then a 1 s gap), so a SLEEP or RESTART can be lost. Options: send
+ *     right after a received frame (~1 s of open air); send copies ~0.8 s apart; or resend
+ *     SLEEP while frames keep arriving in a "should be asleep" state.
  *
  * ---------------------------------------------------------------- PROTOCOL
  *   ../shared/protocol.h: radio settings, Header, TelemetryFrame, buildWake/Sleep/Restart().
@@ -511,6 +512,8 @@ bool RadioBegin(){
     SPI.begin(RADIO_SCK, RADIO_MISO, RADIO_MOSI, RADIO_CS);
     int16_t status = radio.begin(mapds::kFreqMHz, mapds::kBandwidthKHz, mapds::kSpreadingFactor, mapds::kCodingRate,
                                mapds::kSyncWord, mapds::kTxPowerDbm, mapds::kPreamble, kTcxoVolts);
+    if (status == RADIOLIB_ERR_NONE) status = radio.setCurrentLimit(mapds::kCurrentLimitMa);  // begin() leaves 60 mA, which clips 22 dBm
+    if (status == RADIOLIB_ERR_NONE) status = radio.setRxBoostedGainMode(true);              // ~+2 dB RX sensitivity
     if (status != RADIOLIB_ERR_NONE) {
         Serial.printf("Radio init failed (%d)\n", status);  // look the code up in RadioLib's status codes
         return false;
@@ -598,11 +601,11 @@ int32_t ReadPacket(){
 /** Bench: one line with everything the web UI would show. */
 void PrintStatus(){
     Serial.printf("[%s] limit=%s unlock=%d arm=%d deploy=%d | armedLight=%d errorLight=%d deployed=%d deployFail=%d lockFail=%d"
-                  " | seq=%u miss=%d lastPkt=%lums ago | ok pmu=%d gnss=%d imu=%d mag=%d bme=%d | dcmBatt=%d%% rssi=%.0f | ddsBatt=%lumV\n",
+                  " | seq=%u miss=%d lastPkt=%lums ago | ok pmu=%d gnss=%d imu=%d mag=%d bme=%d | dcmBatt=%d%% rssi=%.0f snr=%.1f | ddsBatt=%lumV\n",
                   StateName(state), LimitClosed ? "CLOSED" : "OPEN", UnlockCommand, ArmCommand, DeployCommand,
                   ArmedStatus, ErrorStatus, DeployStatus, DeployFailStatus, LockFailStatus,
                   lastSeq, missCounter, (unsigned long)(millis() - tLastPacket),
-                  dcmPmuOk, dcmGnssOk, dcmImuOk, dcmMagOk, dcmBmeOk, dcmBattPct, lastRssi, (unsigned long)ddsBatteryMv);
+                  dcmPmuOk, dcmGnssOk, dcmImuOk, dcmMagOk, dcmBmeOk, dcmBattPct, lastRssi, lastSnr, (unsigned long)ddsBatteryMv);
 }
 
 /** Bench: a key typed in the serial monitor flips a switch or presses a command. */

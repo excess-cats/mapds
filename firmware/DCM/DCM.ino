@@ -42,7 +42,7 @@
  * ---------------------------------------------------------------- BENCH
  *   Serial monitor at 115200. Each TELEMETRY sent prints a few lines.
  *   The charge LED is steady on in SLEEP, and in TRANSMIT flashes once per
- *   TELEMETRY sent (~140 ms, the time on air). It no longer shows charging status.
+ *   TELEMETRY sent (~0.74 s, the time on air). It no longer shows charging status.
  *   The Heltec (bench/heltec_rx) stands in for the DDS, or type a command
  *   letter in the monitor: w = WAKE, s = SLEEP, r = RESTART, b = CHECK_BATTERY.
  *   Fault keys (toggle, cleared by a reboot), to test the DDS's software-fault checks:
@@ -302,6 +302,8 @@ void RadioBegin(){
   SPI.begin(RADIO_SCK, RADIO_MISO, RADIO_MOSI, RADIO_CS);
   int16_t status = radio.begin(mapds::kFreqMHz, mapds::kBandwidthKHz, mapds::kSpreadingFactor, mapds::kCodingRate,
                                mapds::kSyncWord, mapds::kTxPowerDbm, mapds::kPreamble, kTcxoVolts);
+  if (status == RADIOLIB_ERR_NONE) status = radio.setCurrentLimit(mapds::kCurrentLimitMa);  // begin() leaves 60 mA, which clips 22 dBm
+  if (status == RADIOLIB_ERR_NONE) status = radio.setRxBoostedGainMode(true);              // ~+2 dB RX sensitivity
   radioUp = (status == RADIOLIB_ERR_NONE);
   if (!radioUp) {
     Serial.printf("Radio init failed (%d)\n", status);  // look the code up in RadioLib's status codes
@@ -321,6 +323,8 @@ uint8_t ReadPacket(){
   size_t len = radio.getPacketLength();               // before readData(), which clears the packet
   uint8_t buf[sizeof(mapds::Header)];
   int16_t st = radio.readData(buf, sizeof(buf));      // always read: caps at sizeof(buf), clears DIO1
+  float rssi = radio.getRSSI();                       // both describe the packet just read
+  float snr  = radio.getSNR();
   if (st != RADIOLIB_ERR_NONE) { return 0; }          // e.g. CRC error: corrupted in the air
   if (len != sizeof(mapds::Header)) { return 0; }     // commands are a bare Header
 
@@ -328,7 +332,10 @@ uint8_t ReadPacket(){
   memcpy(&h, buf, sizeof(h));
   if (h.pairId != mapds::kPairId) { return 0; }       // not our DDS
   if (h.msg == mapds::kMsgWake || h.msg == mapds::kMsgSleep || h.msg == mapds::kMsgRestart ||
-      h.msg == mapds::kMsgCheckBattery) { return h.msg; }
+      h.msg == mapds::kMsgCheckBattery) {
+    Serial.printf("cmd %u rssi=%.0f snr=%.1f\n", h.msg, rssi, snr);
+    return h.msg;
+  }
   return 0;
 }
 
