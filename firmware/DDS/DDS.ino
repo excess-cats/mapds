@@ -111,7 +111,7 @@
  *                          V3.0/V3.1: LOW = divider on    V3.2: HIGH = divider on   V3.4 (ours): HIGH, bench-confirmed 2026-10-16
  *                        analogReadMilliVolts() returns calibrated mV. Read only after the divider is on.
  *
- *   SX1262 radio (SPI)   CS 8, SCK 9, MOSI 10, MISO 11, RST 12, BUSY 13, DIO1 14, TCXO 1.8 V, 14 dBm (bench)
+ *   SX1262 radio (SPI)   CS 8, SCK 9, MOSI 10, MISO 11, RST 12, BUSY 13, DIO1 14, TCXO 1.8 V, TX power in protocol.h
  *   Limit switch         GPIO 40, to GND with INPUT_PULLUP: LOW = CLOSED. Debounced 20 ms (ReadLimitSwitch).
  *   Servo bus (Serial1)  TX 38, RX 39, 1000000 baud, servo ID 1
  *                        via DFRobot DRI0057 driver board: Heltec TX -> board RX, Heltec RX -> board TX,
@@ -157,7 +157,6 @@ constexpr int SERVO_RX   = 39;   // Heltec RX <- DRI0057 TX
 // BOARD SETTINGS
 
 constexpr int      kAdcCtrlOn   = HIGH;   // V3.4: HIGH confirmed on the bench; V3.0/V3.1 would be LOW
-constexpr int8_t   kTxPowerDbm  = 14;     // bench value; flight value TBD
 constexpr float    kTcxoVolts   = 1.8f;
 constexpr uint32_t kLimitDebounceMs = 20; // switch must hold a level this long before it counts
 constexpr uint16_t kDcmBattEmptyMv  = 3200; // DCM 18650: 0 %. Little charge left below this (PMU cuts at 3000)
@@ -511,7 +510,7 @@ void ReadLimitSwitch(){
 bool RadioBegin(){
     SPI.begin(RADIO_SCK, RADIO_MISO, RADIO_MOSI, RADIO_CS);
     int16_t status = radio.begin(mapds::kFreqMHz, mapds::kBandwidthKHz, mapds::kSpreadingFactor, mapds::kCodingRate,
-                               mapds::kSyncWord, kTxPowerDbm, mapds::kPreamble, kTcxoVolts);
+                               mapds::kSyncWord, mapds::kTxPowerDbm, mapds::kPreamble, kTcxoVolts);
     if (status != RADIOLIB_ERR_NONE) {
         Serial.printf("Radio init failed (%d)\n", status);  // look the code up in RadioLib's status codes
         return false;

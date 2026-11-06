@@ -118,7 +118,6 @@ constexpr int GPS_EN     = 7;
 // ---------------------------------------------------------------- settings
 
 constexpr uint32_t kTelemetryPeriodMs = 1000;
-constexpr int8_t   kTxPowerDbm        = 14;    // bench value; flight value TBD
 constexpr float    kTcxoVolts         = 1.8f;
 constexpr uint16_t kPmuShutdownMv     = 3000;  // check against the 18650's datasheet
 constexpr uint32_t kFixMaxAgeMs       = 2000;  // older than this = no fix
@@ -302,7 +301,7 @@ bool ReadMag(float magGauss[3]){
 void RadioBegin(){
   SPI.begin(RADIO_SCK, RADIO_MISO, RADIO_MOSI, RADIO_CS);
   int16_t status = radio.begin(mapds::kFreqMHz, mapds::kBandwidthKHz, mapds::kSpreadingFactor, mapds::kCodingRate,
-                               mapds::kSyncWord, kTxPowerDbm, mapds::kPreamble, kTcxoVolts);
+                               mapds::kSyncWord, mapds::kTxPowerDbm, mapds::kPreamble, kTcxoVolts);
   radioUp = (status == RADIOLIB_ERR_NONE);
   if (!radioUp) {
     Serial.printf("Radio init failed (%d)\n", status);  // look the code up in RadioLib's status codes

@@ -13,10 +13,11 @@ constexpr uint8_t kPairId = 0x01;  // unique per DDS/DCM pair
 // ---- Radio (both ends must match) ----
 constexpr float    kFreqMHz          = 915.0f;
 constexpr float    kBandwidthKHz     = 125.0f;
-constexpr uint8_t  kSpreadingFactor  = 7;
+constexpr uint8_t  kSpreadingFactor  = 12;
 constexpr uint8_t  kCodingRate       = 5;     // 4/5
 constexpr uint8_t  kSyncWord         = 0x12;
 constexpr uint16_t kPreamble         = 16;    // symbols
+constexpr int8_t   kTxPowerDbm       = 22;    // bench value; flight value TBD. Heltec V3 max 21 dBm
 
 // ---- Message IDs (header byte 0) ----
 constexpr uint8_t kMsgTelemetry    = 1;  // DCM -> DDS
