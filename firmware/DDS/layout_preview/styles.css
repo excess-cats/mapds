@@ -185,3 +185,57 @@ html[data-vision=nvg] .confirm-deploy { background:#14271d; color:var(--green); 
 .battery-percent[data-level="fault"] { color:var(--red); }
 .battery-percent[data-level="warning"] { color:var(--amber); }
 .battery-percent[data-level="good"] { color:var(--green); }
+
+/* Shared action panel: finish and acknowledge replace Deploy in terminal states. */
+.deploy-button[data-action="ACK"] { background:#e7b6b1; color:#4a211e; box-shadow:inset 0 0 0 3px #ad7973; }
+html[data-vision=nvg] .deploy-button[data-action="ACK"] { background:#2a1815; color:var(--red); box-shadow:inset 0 0 0 3px #69443e; }
+#deployConfirmDialog { width:min(94vw,850px); }
+#deployConfirmDialog .dialog-heading h2 { font-size:clamp(26px,3.2vw,38px); }
+.deploy-confirm-body { padding:clamp(20px,4vw,40px); }
+.deploy-confirm-body p { font-size:clamp(22px,2.8vw,32px); line-height:1.5; margin:0; }
+.deploy-confirm-actions { flex-wrap:wrap; gap:18px; }
+.deploy-confirm-actions button { flex:1 1 220px; min-height:76px; padding:18px 24px; font-size:clamp(20px,2.4vw,28px); }
+#deployConfirmDialog[data-action="ACK"] .confirm-deploy { background:#e7b6b1; color:#4a211e; }
+html[data-vision=nvg] #deployConfirmDialog[data-action="ACK"] .confirm-deploy { background:#2a1815; color:var(--red); }
+
+/* Fit the dashboard to both viewport dimensions, including browser zoom. */
+.cockpit { min-height:0; grid-template-rows:clamp(32px,6dvh,48px) clamp(66px,16dvh,112px) minmax(0,1fr) clamp(90px,22dvh,144px); }
+.display-area, .ground-grid, .flight-grid { min-width:0; }
+.ground-grid, .flight-grid { grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:minmax(0,1fr) minmax(0,1.3fr); }
+.cell { container-type:size; overflow:visible; padding:min(1.5vw,2vh,20px); }
+.control-cell { gap:clamp(3px,1vh,12px); }
+.toggle-track { flex:none; width:min(65cqw,150cqh,320px); height:min(26cqw,60cqh,128px); padding:clamp(2px,1cqh,6px); border-width:clamp(1px,.7cqh,3px); border-radius:999px; }
+.control-label, .flight-arm .control-label { max-width:100%; font-size:clamp(13px,min(7cqw,18cqh),48px); text-align:center; overflow-wrap:anywhere; }
+.deploy-icon { flex:none; width:min(15cqw,26cqh,100px); height:min(15cqw,26cqh,100px); }
+.presence-cell .eyebrow, .state-cell .eyebrow { top:clamp(5px,1.5vh,18px); left:clamp(6px,1.3vw,20px); font-size:clamp(9px,min(3cqw,8cqh),14px); }
+.presence-reading { gap:clamp(4px,2cqw,12px); max-width:100%; }
+.presence-reading strong { font-size:clamp(12px,min(6cqw,15cqh),34px); text-align:center; overflow-wrap:anywhere; }
+.state-name, .flight-state .state-name { max-width:100%; font-size:clamp(16px,min(8cqw,22cqh),70px); }
+.arm-countdown { margin-top:clamp(3px,3cqh,12px); font-size:clamp(10px,min(3.5cqw,9cqh),20px); }
+.cell-heading { min-width:0; gap:4px; flex:none; }
+.cell-heading .eyebrow { font-size:clamp(9px,min(3cqw,7cqh),14px); }
+.cell-heading .framed-button { padding:clamp(3px,1.5cqh,6px); gap:4px; font-size:clamp(9px,min(3cqw,7cqh),12px); }
+.cell-heading .icon { width:clamp(12px,4cqw,16px); height:clamp(12px,4cqw,16px); }
+.gps-grid { min-height:0; min-width:0; grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(2,minmax(0,1fr)); margin-top:clamp(2px,2cqh,10px); gap:clamp(2px,1cqw,8px); }
+.gps-grid > div { min-width:0; min-height:0; gap:clamp(2px,2cqh,8px); padding:0; }
+.gps-grid > div > span { font-size:clamp(9px,min(3cqw,6cqh),12px); }
+.gps-grid strong { font-size:clamp(10px,min(4.6cqw,9cqh),25px); white-space:normal; overflow-wrap:anywhere; }
+.battery-title { top:clamp(6px,1.5vh,12px); left:clamp(8px,1.3vw,18px); right:8px; font-size:clamp(9px,min(1.15vw,2vh),14px); }
+.battery-percent { font-size:clamp(24px,min(5vw,8vh),64px); }
+.battery-graphic { width:clamp(28px,min(6vw,9vh),80px); height:clamp(20px,min(4vw,6vh),50px); right:clamp(6px,1.3vw,18px); }
+.refresh-button { right:calc(clamp(6px,1.3vw,18px) + clamp(28px,min(6vw,9vh),80px) + 6px); width:clamp(26px,min(4vw,7vh),50px); height:clamp(26px,min(4vw,7vh),50px); padding:4px; }
+.log-panel { grid-template-rows:clamp(30px,6vh,42px) minmax(0,1fr); padding:0 clamp(6px,1.3vw,16px); }
+.recent-log { grid-template-rows:repeat(3,minmax(0,1fr)); }
+.log-entry { min-height:0; font-size:clamp(10px,min(1.2vw,2vh),12px); }
+@media(max-width:480px) {
+ .topbar { --nvg-width:34px; }
+ .tabs button { font-size:10px; letter-spacing:.03em; }
+ .battery-cell { justify-content:flex-start; padding:24px 8px 2px; }
+ .battery-percent { font-size:clamp(22px,7vw,32px); }
+ .battery-graphic { right:5px; width:28px; height:20px; transform:translateY(0); }
+ .refresh-button { right:37px; width:26px; height:26px; transform:translateY(-10%); }
+ .presence-reading { flex-direction:column; }
+ .log-heading .framed-button { font-size:10px; gap:3px; padding:3px 5px; }
+ .log-heading .eyebrow { font-size:9px; letter-spacing:.03em; }
+ .log-entry { grid-template-columns:45px 45px minmax(0,1fr); gap:4px; }
+}

@@ -637,6 +637,25 @@ bool webHasTelemetry = false;
 bool webResetPending = false;
 uint32_t tWebResetRequested = 0;
 
+// Last valid GPS-bearing packet, retained until the Heltec restarts.
+// A no-fix packet or sleeping DCM must not erase the last known location.
+// Web-only cache: the FSM continues using its original telemetry variables.
+bool webHasGps = false;
+double webGpsLatDeg = 0, webGpsLonDeg = 0;
+float webGpsAltM = 0;
+uint32_t tWebGpsPacket = 0;
+
+void RememberWebGps(){
+    if (!webHasTelemetry || !dcmGnssOk) return;
+    if (!isfinite(dcmLatDeg) || !isfinite(dcmLonDeg) || !isfinite(dcmGpsAltM)) return;
+    if (dcmLatDeg < -90 || dcmLatDeg > 90 || dcmLonDeg < -180 || dcmLonDeg > 180) return;
+    webGpsLatDeg = dcmLatDeg;
+    webGpsLonDeg = dcmLonDeg;
+    webGpsAltM = dcmGpsAltM;
+    tWebGpsPacket = tLastPacket; // age of the packet, never time of the HTTP request
+    webHasGps = true;
+}
+
 
 // ---------------------------------------------------------------- BATTERY DISPLAY
 // DDS is the Heltec's single-cell 3.7 V LiPo. Its existing voltage reader
@@ -653,6 +672,52 @@ int WebBatteryPercent(uint32_t mv){
     const int32_t pct = (int32_t(mv) - kDdsBattEmptyMv) * 100 /
                         (kDdsBattFullMv - kDdsBattEmptyMv);
     return constrain(pct, 0, 100);
+}
+
+// Display filtering only. Five voltage samples reject short spikes; a changed
+// percentage must hold for three seconds before replacing the displayed value.
+// Fixed storage, no extra ADC reads, and no waiting for the next sample.
+constexpr uint32_t kWebBatterySampleMs = 200;
+constexpr uint32_t kWebBatteryConfirmMs = 3000;
+uint32_t webBatterySamples[5] = {};
+uint8_t webBatterySampleCount = 0, webBatterySampleIndex = 0;
+uint32_t tWebBatterySample = 0, tWebBatteryCandidate = 0;
+int webBatteryDisplayPct = -1, webBatteryCandidatePct = -1;
+bool webBatteryReady = false;
+
+void ServiceWebBattery(){
+    const uint32_t now = millis();
+    if (now - tWebBatterySample < kWebBatterySampleMs) return;
+    tWebBatterySample = now; // one sample per service; never catch up in a loop
+    webBatterySamples[webBatterySampleIndex] = ddsBatteryMv;
+    webBatterySampleIndex = (webBatterySampleIndex + 1) % 5;
+    if (webBatterySampleCount < 5) ++webBatterySampleCount;
+    if (webBatterySampleCount < 5) return; // collect the first second before displaying
+
+    // Sort a local copy. The middle reading ignores up to two isolated outliers.
+    uint32_t sorted[5];
+    for (int i = 0; i < 5; ++i) sorted[i] = webBatterySamples[i];
+    for (int i = 1; i < 5; ++i) {
+        for (int j = i; j > 0 && sorted[j] < sorted[j - 1]; --j) {
+            const uint32_t value = sorted[j];
+            sorted[j] = sorted[j - 1];
+            sorted[j - 1] = value;
+        }
+    }
+    const int pct = WebBatteryPercent(sorted[2]);
+    if (!webBatteryReady) {
+        webBatteryDisplayPct = webBatteryCandidatePct = pct;
+        tWebBatteryCandidate = now;
+        webBatteryReady = true; // first result needs no additional confirmation
+        return;
+    }
+    if (pct != webBatteryCandidatePct) {
+        webBatteryCandidatePct = pct;
+        tWebBatteryCandidate = now; // a different candidate restarts confirmation
+    }
+    if (pct != webBatteryDisplayPct && now - tWebBatteryCandidate >= kWebBatteryConfirmMs) {
+        webBatteryDisplayPct = pct;
+    }
 }
 
 // ---------------------------------------------------------------- JSON HELPERS
@@ -679,7 +744,7 @@ void CockpitStatus(){
     json = "{\"state\":\""; json += StateName(state); json += "\"";
     WebFlag(json, "dcmPresent", LimitClosed); WebFlag(json, "servoUp", servoUp); WebFlag(json, "radioUp", radioUp);
     // Heltec battery stays on its own LiPo profile.
-    WebNumber(json, "ddsBatteryPct", WebBatteryPercent(ddsBatteryMv), 0);
+    WebNumber(json, "ddsBatteryPct", webBatteryDisplayPct, 0);
     WebNumber(json, "ddsBatteryMv", ddsBatteryMv, 0); WebNumber(json, "stateAgeMs", millis() - TimeStateEntered, 0);
     WebNumber(json, "missCounter", missCounter, 0);
     WebNumber(json, "lockSettleMs", kLockSettleMs, 0);
@@ -693,6 +758,13 @@ void CockpitStatus(){
     json += ",\"indicators\":{\"ArmedStatus\":"; json += ArmedStatus ? "true" : "false";
     WebFlag(json, "ErrorStatus", ErrorStatus); WebFlag(json, "DeployStatus", DeployStatus); WebFlag(json, "DeployFailStatus", DeployFailStatus);
     WebFlag(json, "LockFailStatus", LockFailStatus); json += '}';
+    // Last known location is separate from the latest packet's current fix flag.
+    // This also restores the location when the browser opens after updates stop.
+    json += ",\"lastGps\":{\"available\":"; json += webHasGps ? "true" : "false";
+    WebNumber(json, "ageMs", millis() - tWebGpsPacket, 0);
+    WebNumber(json, "latDeg", webGpsLatDeg, 7);
+    WebNumber(json, "lonDeg", webGpsLonDeg, 7);
+    WebNumber(json, "altM", webGpsAltM, 1); json += '}';
     // Last received packet only. A status request does not wake or poll the DCM.
     json += ",\"telemetry\":{\"hasTelemetry\":"; json += webHasTelemetry ? "true" : "false";
     WebNumber(json, "ageMs", millis() - tLastPacket, 0); WebNumber(json, "lastTelemetrySeq", lastSeq, 0);
@@ -755,6 +827,8 @@ void StartCockpitServer(){
 // Timer checks do not wait, but the regular WebServer still has socket waits.
 void ServiceCockpit(){
     if (tLastPacket != 0) webHasTelemetry = true; 
+    RememberWebGps(); // cached values only; no extra radio or sensor reads
+    ServiceWebBattery(); // stabilize the display; raw battery voltage stays unchanged
     if (webResetPending) { if (millis() - tWebResetRequested >= 750) ESP.restart(); return; }
     // Regular WebServer still has synchronous socket waits. Defer it during the timed jiggle.
     if (webServerUp && state != DEPLOY_ERROR) cockpitServer.handleClient();

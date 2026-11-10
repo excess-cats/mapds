@@ -44,10 +44,10 @@ const char WEB_MAIN_HTML[] PROGMEM = R"WEBHTML(<!doctype html>
     </section>
 
     <section id="flightView" class="flight-grid" role="tabpanel" aria-labelledby="flightTab" hidden>
-      <button id="armSwitch" disabled class="cell control-cell flight-arm" type="button" role="switch" aria-checked="false" aria-label="Arm/Disarm System"><span class="toggle-track" aria-hidden="true"><span class="toggle-handle"></span></span><strong id="armText" class="control-label">Arm/Disarm System</strong></button>
+      <button id="armSwitch" disabled class="cell control-cell flight-arm" type="button" role="switch" aria-checked="false" aria-label="Arm/Disarm System"><span class="toggle-track" aria-hidden="true"><span class="toggle-handle"></span></span><strong id="armText" class="control-label">DISARMED</strong></button>
       <button id="deploySwitch" disabled class="cell control-cell flight-deploy deploy-button" type="button" aria-label="Deploy drone" aria-haspopup="dialog" aria-controls="deployConfirmDialog"><svg class="deploy-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><strong id="deployText" class="control-label">DEPLOY</strong></button>
-      <div class="cell state-cell flight-state" data-state="OFFLINE"><span class="eyebrow">SYSTEM STATE</span><strong class="state-name" data-state-name>OFFLINE</strong><span class="arm-countdown" data-arm-countdown hidden></span><div class="state-actions"><button id="endSleepButton" class="framed-button" type="button" disabled>END / SLEEP</button><button id="ackButton" class="framed-button" type="button" hidden>ACKNOWLEDGE FAILURE</button></div></div>
-      <div class="cell gps-cell"><div class="cell-heading"><span class="eyebrow">GPS</span><button id="telemetryButton" class="framed-button" type="button">Telemetry<svg class="icon"><use href="#i-open"/></svg></button></div><div class="gps-grid"><div><span>Latitude</span><strong id="latitudeValue">NOT AVAILABLE</strong></div><div><span>Longitude</span><strong id="longitudeValue">NOT AVAILABLE</strong></div><div><span>Altitude</span><strong id="altitudeValue">NOT AVAILABLE</strong></div><div><span>Last GPS update</span><strong id="gpsAge" title="Age of the last received telemetry with valid GPS; the receiver fix timestamp is not in the packet.">NOT AVAILABLE</strong></div></div></div>
+      <div class="cell state-cell flight-state" data-state="OFFLINE"><span class="eyebrow">SYSTEM STATE</span><strong class="state-name" data-state-name>OFFLINE</strong><span class="arm-countdown" data-arm-countdown hidden></span></div>
+      <div class="cell gps-cell"><div class="cell-heading"><span class="eyebrow">GPS</span><button id="telemetryButton" class="framed-button" type="button">Telemetry<svg class="icon"><use href="#i-open"/></svg></button></div><div class="gps-grid"><div><span>Latitude</span><strong id="latitudeValue">NOT AVAILABLE</strong></div><div><span>Longitude</span><strong id="longitudeValue">NOT AVAILABLE</strong></div><div><span>Altitude</span><strong id="altitudeValue">NOT AVAILABLE</strong></div><div><span>Last GPS update</span><strong id="gpsAge" title="Age of the last valid GPS-bearing packet. The location stays visible when updates stop.">NOT AVAILABLE</strong></div></div></div>
     </section>
   </main>
 
@@ -240,6 +240,60 @@ html[data-vision=nvg] .confirm-deploy { background:#14271d; color:var(--green); 
 .battery-percent[data-level="fault"] { color:var(--red); }
 .battery-percent[data-level="warning"] { color:var(--amber); }
 .battery-percent[data-level="good"] { color:var(--green); }
+
+/* Shared action panel: finish and acknowledge replace Deploy in terminal states. */
+.deploy-button[data-action="ACK"] { background:#e7b6b1; color:#4a211e; box-shadow:inset 0 0 0 3px #ad7973; }
+html[data-vision=nvg] .deploy-button[data-action="ACK"] { background:#2a1815; color:var(--red); box-shadow:inset 0 0 0 3px #69443e; }
+#deployConfirmDialog { width:min(94vw,850px); }
+#deployConfirmDialog .dialog-heading h2 { font-size:clamp(26px,3.2vw,38px); }
+.deploy-confirm-body { padding:clamp(20px,4vw,40px); }
+.deploy-confirm-body p { font-size:clamp(22px,2.8vw,32px); line-height:1.5; margin:0; }
+.deploy-confirm-actions { flex-wrap:wrap; gap:18px; }
+.deploy-confirm-actions button { flex:1 1 220px; min-height:76px; padding:18px 24px; font-size:clamp(20px,2.4vw,28px); }
+#deployConfirmDialog[data-action="ACK"] .confirm-deploy { background:#e7b6b1; color:#4a211e; }
+html[data-vision=nvg] #deployConfirmDialog[data-action="ACK"] .confirm-deploy { background:#2a1815; color:var(--red); }
+
+/* Fit the dashboard to both viewport dimensions, including browser zoom. */
+.cockpit { min-height:0; grid-template-rows:clamp(32px,6dvh,48px) clamp(66px,16dvh,112px) minmax(0,1fr) clamp(90px,22dvh,144px); }
+.display-area, .ground-grid, .flight-grid { min-width:0; }
+.ground-grid, .flight-grid { grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:minmax(0,1fr) minmax(0,1.3fr); }
+.cell { container-type:size; overflow:visible; padding:min(1.5vw,2vh,20px); }
+.control-cell { gap:clamp(3px,1vh,12px); }
+.toggle-track { flex:none; width:min(65cqw,150cqh,320px); height:min(26cqw,60cqh,128px); padding:clamp(2px,1cqh,6px); border-width:clamp(1px,.7cqh,3px); border-radius:999px; }
+.control-label, .flight-arm .control-label { max-width:100%; font-size:clamp(13px,min(7cqw,18cqh),48px); text-align:center; overflow-wrap:anywhere; }
+.deploy-icon { flex:none; width:min(15cqw,26cqh,100px); height:min(15cqw,26cqh,100px); }
+.presence-cell .eyebrow, .state-cell .eyebrow { top:clamp(5px,1.5vh,18px); left:clamp(6px,1.3vw,20px); font-size:clamp(9px,min(3cqw,8cqh),14px); }
+.presence-reading { gap:clamp(4px,2cqw,12px); max-width:100%; }
+.presence-reading strong { font-size:clamp(12px,min(6cqw,15cqh),34px); text-align:center; overflow-wrap:anywhere; }
+.state-name, .flight-state .state-name { max-width:100%; font-size:clamp(16px,min(8cqw,22cqh),70px); }
+.arm-countdown { margin-top:clamp(3px,3cqh,12px); font-size:clamp(10px,min(3.5cqw,9cqh),20px); }
+.cell-heading { min-width:0; gap:4px; flex:none; }
+.cell-heading .eyebrow { font-size:clamp(9px,min(3cqw,7cqh),14px); }
+.cell-heading .framed-button { padding:clamp(3px,1.5cqh,6px); gap:4px; font-size:clamp(9px,min(3cqw,7cqh),12px); }
+.cell-heading .icon { width:clamp(12px,4cqw,16px); height:clamp(12px,4cqw,16px); }
+.gps-grid { min-height:0; min-width:0; grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(2,minmax(0,1fr)); margin-top:clamp(2px,2cqh,10px); gap:clamp(2px,1cqw,8px); }
+.gps-grid > div { min-width:0; min-height:0; gap:clamp(2px,2cqh,8px); padding:0; }
+.gps-grid > div > span { font-size:clamp(9px,min(3cqw,6cqh),12px); }
+.gps-grid strong { font-size:clamp(10px,min(4.6cqw,9cqh),25px); white-space:normal; overflow-wrap:anywhere; }
+.battery-title { top:clamp(6px,1.5vh,12px); left:clamp(8px,1.3vw,18px); right:8px; font-size:clamp(9px,min(1.15vw,2vh),14px); }
+.battery-percent { font-size:clamp(24px,min(5vw,8vh),64px); }
+.battery-graphic { width:clamp(28px,min(6vw,9vh),80px); height:clamp(20px,min(4vw,6vh),50px); right:clamp(6px,1.3vw,18px); }
+.refresh-button { right:calc(clamp(6px,1.3vw,18px) + clamp(28px,min(6vw,9vh),80px) + 6px); width:clamp(26px,min(4vw,7vh),50px); height:clamp(26px,min(4vw,7vh),50px); padding:4px; }
+.log-panel { grid-template-rows:clamp(30px,6vh,42px) minmax(0,1fr); padding:0 clamp(6px,1.3vw,16px); }
+.recent-log { grid-template-rows:repeat(3,minmax(0,1fr)); }
+.log-entry { min-height:0; font-size:clamp(10px,min(1.2vw,2vh),12px); }
+@media(max-width:480px) {
+ .topbar { --nvg-width:34px; }
+ .tabs button { font-size:10px; letter-spacing:.03em; }
+ .battery-cell { justify-content:flex-start; padding:24px 8px 2px; }
+ .battery-percent { font-size:clamp(22px,7vw,32px); }
+ .battery-graphic { right:5px; width:28px; height:20px; transform:translateY(0); }
+ .refresh-button { right:37px; width:26px; height:26px; transform:translateY(-10%); }
+ .presence-reading { flex-direction:column; }
+ .log-heading .framed-button { font-size:10px; gap:3px; padding:3px 5px; }
+ .log-heading .eyebrow { font-size:9px; letter-spacing:.03em; }
+ .log-entry { grid-template-columns:45px 45px minmax(0,1fr); gap:4px; }
+}
 )WEBCSS";
 
 const char WEB_INTERFACE_JS[] PROGMEM = R"WEBJS("use strict";
@@ -253,9 +307,49 @@ const history=[];
 let selectedMessage=null, nextMessageId=0;
 let snapshot=null, lastStatusAt=0, pollBusy=false, commandBusy=false;
 let pendingInput=null, pendingRefresh=null, gpsReceivedAt=null;
-let previousState=null, previousPresence=null, previousGps=null, previousFresh=null, wasOnline=false;
+let lastKnownGps=null;
+let previousState=null, previousPresence=null;
 let previousPacket=null;
 let previousLockFail=null;
+const COMM_LOSS_MS=60000, COMM_RECOVERY_MS=300000;
+const ddsConnectionLog=newConnectionLog(), dcmConnectionLog=newConnectionLog();
+function newConnectionLog(){return {reported:false,seenUp:false,upSince:null,downSince:null};}
+// Log once after a full disconnected minute. No repeat entries while it stays down.
+// After reporting, five continuous connected minutes rearm the next loss report.
+function trackConnectionLog(link,up,name,reportInitialLoss=false){
+ const now=performance.now();
+ if(up){
+  link.seenUp=true;link.downSince=null;
+  if(link.upSince===null)link.upSince=now;
+  if(now-link.upSince>=COMM_RECOVERY_MS)link.reported=false;
+ }else{
+  link.upSince=null;
+  if(link.seenUp||reportInitialLoss){
+   if(link.downSince===null)link.downSince=now;
+   if(!link.reported&&now-link.downSince>=COMM_LOSS_MS){
+    link.reported=true;
+    addMessage('status',name+' disconnected','Connection has been unavailable for one minute. The latest valid GPS fix remains displayed.');
+   }
+  }
+ }
+}
+function updateCommunicationLogs(){
+ const online=connected();
+ trackConnectionLog(ddsConnectionLog,online,'Drone Deployment System');
+ // Sleeping DCM and an unavailable DDS are not evidence of a radio disconnect.
+ if(!online||['STANDBY','UNLOCK','LOCKING','LOAD'].includes(snapshot.state)){
+  dcmConnectionLog.upSince=null;dcmConnectionLog.downSince=null;return;
+ }
+ const age=ageMs();
+ const timeout=Number.isFinite(snapshot.limits?.noPacketMs)?snapshot.limits.noPacketMs:10000;
+ const up=age!==null&&age<=timeout;
+ const stateAge=(snapshot.stateAgeMs||0)+Math.max(0,performance.now()-lastStatusAt);
+ const armDelay=Number.isFinite(snapshot.limits?.armDelayMs)?snapshot.limits.armDelayMs:15000;
+ if(!up&&snapshot.state==='ARMED'&&stateAge<armDelay){
+  dcmConnectionLog.upSince=null;dcmConnectionLog.downSince=null;return;
+ }
+ trackConnectionLog(dcmConnectionLog,up,'Drone Communication Module',true);
+}
 const statePalette = {
   OFFLINE:["#172127", "#9faeb7", "#080f0c", "#88a695"],
   STANDBY:["#FFFFFF", "#15232b", "#121c16", "#9ec4b0"],
@@ -270,7 +364,7 @@ const statePalette = {
   DEPLOY_FAILURE:["#6F7681", "#ffffff", "#1a211e", "#9ec4b0"]
 };
 
-const labels={info:'INFO',input:'INPUT',success:'STATUS',warning:'WARNING',fault:'FAULT'};
+const labels={status:'STATUS',info:'INFO',input:'INPUT',success:'STATUS',warning:'WARNING',fault:'FAULT'};
 function connected(){return snapshot!==null&&performance.now()-lastStatusAt<=LINK_TIMEOUT_MS;}
 function ageMs(){const t=snapshot?.telemetry;return connected()&&t?.hasTelemetry===true&&Number.isFinite(t.ageMs)&&t.ageMs>=0?t.ageMs+Math.max(0,performance.now()-lastStatusAt):null;}
 function freshTelemetry(){const age=ageMs();return age!==null&&age<=TELEMETRY_FRESH_MS?snapshot.telemetry:{};}
@@ -278,6 +372,18 @@ function ageText(age){return Number.isFinite(age)?`${Math.floor(Math.max(0,age)/
 function numberText(value,unit='',digits=1){return Number.isFinite(value)?`${value.toFixed(digits)}${unit?' '+unit:''}`:'NOT AVAILABLE';}
 function vectorText(value,unit){return Array.isArray(value)&&value.length===3&&value.every(Number.isFinite)?`${value.map(v=>v.toFixed(2)).join(' / ')} ${unit}`:'NOT AVAILABLE';}
 function coordinate(value,positive,negative,limit){return Number.isFinite(value)&&Math.abs(value)<=limit?`${Math.abs(value).toFixed(7)}\u00b0 ${value>=0?positive:negative}`:'NOT AVAILABLE';}
+// Keep the last valid fix even when packets stop, GPS loses its fix, or DDS disconnects.
+// Prefer the Heltec cache so refreshing the page can recover an earlier location.
+function rememberGps(data){
+ const saved=data.lastGps,telemetry=data.telemetry||{};
+ const fix=saved?.available===true?
+  {lat:saved.latDeg,lon:saved.lonDeg,alt:saved.altM,age:saved.ageMs}:
+  telemetry.hasTelemetry===true&&telemetry.dcmGnssOk===true?
+  {lat:telemetry.dcmLatDeg,lon:telemetry.dcmLonDeg,alt:telemetry.dcmGpsAltM,age:telemetry.ageMs}:null;
+ if(!fix||![fix.lat,fix.lon,fix.alt,fix.age].every(Number.isFinite)||fix.age<0||Math.abs(fix.lat)>90||Math.abs(fix.lon)>180)return;
+ lastKnownGps={lat:fix.lat,lon:fix.lon,alt:fix.alt};
+ gpsReceivedAt=performance.now()-fix.age;
+}
 function setDisplayedState(state){
  const colors=statePalette[state]||statePalette.OFFLINE;
  document.querySelectorAll('.state-cell').forEach(cell=>{cell.dataset.state=state;['--state-bg','--state-ink','--night-bg','--night-ink'].forEach((key,i)=>cell.style.setProperty(key,colors[i]));});
@@ -312,6 +418,7 @@ function renderTelemetry(t){
 }
 function render(){
  const online=connected(),state=online?snapshot.state:'OFFLINE';setDisplayedState(state);
+ document.querySelectorAll('[data-state-name]').forEach(node=>{if(state==='ARMED'&&snapshot.indicators?.ArmedStatus!==true)node.textContent='ARMING';});
  const showArmCountdown=online&&state==='ARMED'&&snapshot.indicators?.ArmedStatus!==true&&Number.isFinite(snapshot.stateAgeMs)&&Number.isFinite(snapshot.limits?.armDelayMs);
  const remaining=showArmCountdown?Math.max(0,Math.ceil((snapshot.limits.armDelayMs-snapshot.stateAgeMs-Math.max(0,performance.now()-lastStatusAt))/1000)):0;
  document.querySelectorAll('[data-arm-countdown]').forEach(node=>{
@@ -325,7 +432,7 @@ function render(){
   button.disabled=value===null||commandBusy||Boolean(pendingInput)||Boolean(pendingRefresh)||(command==='DEPLOY'&&value===true);
   button.setAttribute('aria-busy',String(pendingInput?.command===command));
   const id=command==='UNLOCK'?'lockText':command==='ARM'?'armText':'deployText';
-  $('#'+id).textContent=command==='ARM'?'Arm/Disarm System':command==='DEPLOY'?'DEPLOY':value===null?'NOT AVAILABLE':state==='LOCKING'?'LOCKING':state==='UNLOCK'?'UNLOCKED':'LOCKED';
+  $('#'+id).textContent=command==='ARM'?(value===true?'ARMED':'DISARMED'):command==='DEPLOY'?'DEPLOY':value===null?'NOT AVAILABLE':state==='LOCKING'?'LOCKING':state==='UNLOCK'?'UNLOCKED':'LOCKED';
  }
  const present=online&&typeof snapshot.dcmPresent==='boolean'?snapshot.dcmPresent:null;
  $('#attachmentText').textContent=present===null?'NOT AVAILABLE':present?'ATTACHED':'NOT ATTACHED';$('#presenceCell').dataset.attached=String(present===true);
@@ -333,16 +440,21 @@ function render(){
  const t=snapshot?.telemetry;
  renderBattery('dcm',online&&t?.hasTelemetry===true&&t.dcmPmuOk===true?t.dcmBattPct:null);
  const age=ageMs();$('#dcmBattery').title=online&&age!==null?`Last battery packet: ${ageText(age)}`:'No Drone Communication Module battery reading';
- const current=freshTelemetry(),fix=current.dcmGnssOk===true;
- $('#latitudeValue').textContent=coordinate(fix?current.dcmLatDeg:null,'N','S',90);
- $('#longitudeValue').textContent=coordinate(fix?current.dcmLonDeg:null,'E','W',180);
- $('#altitudeValue').textContent=numberText(fix?current.dcmGpsAltM:null,'m');
- $('#gpsAge').textContent=online&&gpsReceivedAt!==null?ageText(performance.now()-gpsReceivedAt):'NOT AVAILABLE';
+ const current=freshTelemetry();
+ $('#latitudeValue').textContent=coordinate(lastKnownGps?.lat,'N','S',90);
+ $('#longitudeValue').textContent=coordinate(lastKnownGps?.lon,'E','W',180);
+ $('#altitudeValue').textContent=numberText(lastKnownGps?.alt,'m');
+ $('#gpsAge').textContent=gpsReceivedAt!==null?ageText(performance.now()-gpsReceivedAt):'NOT AVAILABLE';
  renderTelemetry(current);
  $('#refreshButton').disabled=!online||commandBusy||Boolean(pendingRefresh)||Boolean(pendingInput);
  $('#refreshButton').dataset.busy=String(Boolean(pendingRefresh));
- $('#endSleepButton').disabled=!online||state!=='DEPLOYED'||commandBusy||Boolean(pendingInput)||Boolean(pendingRefresh);
- $('#ackButton').hidden=!online||state!=='DEPLOY_FAILURE';$('#ackButton').disabled=commandBusy||Boolean(pendingInput)||Boolean(pendingRefresh);
+ const action=state==='DEPLOYED'?'END':state==='DEPLOY_FAILURE'?'ACK':'DEPLOY';
+ const actionText=action==='END'?'End Operation':action==='ACK'?'Acknowledge Failure':'DEPLOY';
+ const actionButton=$('#deploySwitch');
+ actionButton.dataset.action=action;
+ actionButton.setAttribute('aria-label',actionText);
+ $('#deployText').textContent=actionText;
+ if(action!=='DEPLOY')actionButton.disabled=!online||commandBusy||Boolean(pendingInput)||Boolean(pendingRefresh);
 }
 function entryButton(entry, expanded=false) {
   const button = document.createElement("button");
@@ -381,16 +493,11 @@ function stateDescription(data){
 }
 function applyStatus(data,requestStarted){
  if(!data||typeof data.state!=='string') throw new Error('Invalid status');
- const reconnected=!connected();snapshot=data;lastStatusAt=performance.now();wasOnline=true;
- if(reconnected)addMessage('success','Drone Deployment System connected','The browser is receiving live status from the Heltec. No sample values are used.');
+ updateCommunicationLogs();snapshot=data;lastStatusAt=performance.now();
  const lockFailed=data.indicators?.LockFailStatus;
  if(typeof lockFailed==='boolean'&&lockFailed!==previousLockFail){if(lockFailed)addMessage('fault','Lock failed','The firmware could not confirm the closed position. It returned to UNLOCK. Inspect the mechanism, then select Lock to retry.');else if(previousLockFail===true)addMessage('success','Lock check passed','The firmware cleared the previous lock failure after a successful position check.');previousLockFail=lockFailed;}
  if(previousState!==data.state){addMessage(['SOFTWARE_ERROR','DEPLOY_ERROR','DEPLOY_FAILURE'].includes(data.state)?'fault':'success',data.state.replaceAll('_',' '),stateDescription(data));previousState=data.state;}
  const t=data.telemetry||{},fresh=t.hasTelemetry===true&&Number.isFinite(t.ageMs)&&t.ageMs<=TELEMETRY_FRESH_MS;
- const packetKey=t.hasTelemetry===true?`${t.lastTelemetrySeq}:${Math.round(lastStatusAt-t.ageMs)}`:null;
- if(fresh&&t.dcmGnssOk===true&&Number.isFinite(t.dcmLatDeg)&&Number.isFinite(t.dcmLonDeg)&&Number.isFinite(t.dcmGpsAltM))gpsReceivedAt=lastStatusAt-t.ageMs;
- if(fresh&&['ARMED','DEPLOYING','DEPLOYED','DEPLOY_ERROR'].includes(data.state)&&typeof t.dcmGnssOk==='boolean'&&previousGps!==t.dcmGnssOk){addMessage(t.dcmGnssOk?'success':'warning',t.dcmGnssOk?'GPS update received':'No GPS fix',t.dcmGnssOk?'A valid GPS-bearing telemetry packet arrived. The receiver fix timestamp itself is not transmitted.':'Drone Communication Module telemetry is arriving, but it does not report a valid GPS location.');previousGps=t.dcmGnssOk;}
- if(previousFresh===false&&fresh)addMessage('success','Drone Communication Module update received','A fresh Drone Communication Module telemetry packet was received by Drone Deployment System.');previousFresh=fresh;
  if(pendingInput&&pendingInput.acceptedAt!==null&&requestStarted>=pendingInput.acceptedAt){
   const request=pendingInput;pendingInput=null;
   if(data.inputs?.[INPUTS[request.command]]!==request.value)addMessage('warning','Input was not retained','Drone Deployment System reports a different lever value. Its automation may clear inputs, including DEPLOY before arming completes. The display follows Drone Deployment System.');
@@ -399,11 +506,11 @@ function applyStatus(data,requestStarted){
   const valid=t.dcmPmuOk===true&&Number.isFinite(t.dcmBattMv)&&t.dcmBattMv>0;
   pendingRefresh=null;addMessage(valid?'success':'warning',valid?'Battery updated':'Battery unavailable',valid?'A new Drone Communication Module packet containing a battery reading arrived.':'The Drone Communication Module replied but did not report a usable battery voltage.');
  }
- previousPacket=packetKey;render();
+ rememberGps(data);updateCommunicationLogs();render();
 }
 async function pollStatus(){
  if(pollBusy)return;pollBusy=true;const started=performance.now();const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),REQUEST_TIMEOUT_MS);
- try{const response=await fetch('/api/status',{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('Status unavailable');applyStatus(await response.json(),started);}catch(_){/* Heartbeat reports a lost connection once. */}finally{clearTimeout(timer);pollBusy=false;}
+ try{const response=await fetch('/api/status',{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('Status unavailable');applyStatus(await response.json(),started);}catch(_){/* Connection timers handle logging; no entry for each failed poll. */}finally{clearTimeout(timer);pollBusy=false;}
 }
 async function postCommand(command,value){
  const body={command};if(typeof value==='boolean')body.value=String(value);
@@ -432,12 +539,9 @@ async function stateAction(command){
  try{const result=await postCommand(command);addMessage(result.ok?'input':'warning',result.ok?(command==='END'?'END / SLEEP requested':'Failure acknowledgment requested'):'Request rejected',result.ok?'The existing firmware command variable was set. Its FSM owns the resulting action.':result.message||'Drone Deployment System rejected the input.');}catch(_){snapshot=null;addMessage('fault','Command unconfirmed','The response was lost. Wait for Drone Deployment System status before sending another request.');}finally{commandBusy=false;render();pollStatus();}
 }
 function heartbeat(){
- if(wasOnline&&!connected()){wasOnline=false;addMessage('fault','Drone Deployment System connection lost','No current status from Heltec. Inputs are unavailable until a new snapshot arrives.');}
  if(pendingInput?.deadline&&performance.now()>=pendingInput.deadline){pendingInput=null;snapshot=null;addMessage('fault','Input unconfirmed','Drone Deployment System did not return a confirming status. Wait for the connection to recover.');}
- if(pendingRefresh?.deadline&&performance.now()>=pendingRefresh.deadline){pendingRefresh=null;addMessage('warning','No battery reply','No new Drone Communication Module battery packet arrived before the refresh timeout. The last known reading remains displayed.');}
- const fresh=ageMs()!==null&&ageMs()<=TELEMETRY_FRESH_MS;
- if(connected()&&previousFresh===true&&!fresh&&['ARMED','DEPLOYING','DEPLOYED'].includes(snapshot.state)){addMessage('warning','Drone Communication Module updates stopped','The displayed packet age continues increasing. Stale sensor and GPS readings are hidden.');previousFresh=false;}
- render();
+ if(pendingRefresh?.deadline&&performance.now()>=pendingRefresh.deadline){pendingRefresh=null;addMessage('status','No battery reply','No new Drone Communication Module battery packet arrived before the refresh timeout. The last known reading remains displayed.');}
+ updateCommunicationLogs();render();
 }
 
 $("#groundTab").onclick=()=>activateTab("ground");
@@ -466,12 +570,25 @@ document.querySelectorAll("dialog").forEach(dialog=>dialog.addEventListener("cli
 
 $('#lockSwitch').onclick=()=>toggleInput('UNLOCK');
 $('#armSwitch').onclick=()=>toggleInput('ARM');
-$('#deploySwitch').onclick=()=>{if(!$('#deploySwitch').disabled)$('#deployConfirmDialog').showModal();};
+let confirmedAction=null;
+$('#deploySwitch').onclick=()=>{
+ if($('#deploySwitch').disabled)return;
+ confirmedAction=$('#deploySwitch').dataset.action;
+ const copy=confirmedAction==='END'?['End Operation','Are you sure you want to end the operation and send the sleep command?','Yes, end operation']:confirmedAction==='ACK'?['Acknowledge Failure','Are you sure you want to acknowledge the deployment failure?','Yes, acknowledge failure']:['Confirm deployment','Are you sure you want to deploy the drone?','Yes, deploy'];
+ $('#deployConfirmTitle').textContent=copy[0];
+ $('#deployConfirmDialog .deploy-confirm-body p').textContent=copy[1];
+ $('#confirmDeployButton').textContent=copy[2];
+ $('#deployConfirmDialog').dataset.action=confirmedAction;
+ $('#deployConfirmDialog').showModal();
+};
 $('#cancelDeployButton').onclick=()=>$('#deployConfirmDialog').close();
-$('#confirmDeployButton').onclick=()=>{$('#deployConfirmDialog').close();if(!$('#deploySwitch').disabled)toggleInput('DEPLOY',true);};
+$('#confirmDeployButton').onclick=()=>{
+ $('#deployConfirmDialog').close();
+ if($('#deploySwitch').disabled||confirmedAction!==$('#deploySwitch').dataset.action)return;
+ if(confirmedAction==='DEPLOY')toggleInput('DEPLOY',true);
+ else stateAction(confirmedAction);
+};
 $('#refreshButton').onclick=requestRefresh;
-$('#endSleepButton').onclick=()=>stateAction('END');
-$('#ackButton').onclick=()=>stateAction('ACK');
 addMessage('info','Waiting for Drone Deployment System','Connect to the Heltec Wi-Fi and open its local cockpit address. Inputs and readings appear only after actual status arrives.');
 render();pollStatus();setInterval(pollStatus,POLL_MS);setInterval(heartbeat,POLL_MS);
 )WEBJS";
