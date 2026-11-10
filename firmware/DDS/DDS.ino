@@ -623,11 +623,150 @@ void ReadSerial(){
     PrintStatus();
 }
 
+// -------------------------- WEB VARIABLE BRIDGE --------------------------
+// Web adapter only. Bundled ESP32 libraries; no extra web-server dependency.
+#include <WiFi.h>
+#include <WebServer.h>
+#include "web_assets.h"
+
+constexpr char kDdsWifiSsid[] = "DDI_MAPDS";
+constexpr char kDdsWifiPassword[] = "12345678";
+WebServer cockpitServer(80);
+bool webServerUp = false;
+bool webHasTelemetry = false;
+bool webResetPending = false;
+uint32_t tWebResetRequested = 0;
+
+
+// ---------------------------------------------------------------- BATTERY DISPLAY
+// DDS is the Heltec's single-cell 3.7 V LiPo. Its existing voltage reader
+// belongs to the automation; the bridge never reads the ADC a second time.
+// DDS percentage: the same straight-line calculation used by UpdateDcmBattPct().
+// 3200 mV -> 0%, 4200 mV -> 100%; values outside that span are clamped.
+int WebBatteryPercent(uint32_t mv){
+    constexpr uint16_t kDdsBattEmptyMv = 3200;
+    constexpr uint16_t kDdsBattFullMv = 4200;
+    if (mv == 0) return -1; // no voltage reading: display unavailable
+    // Clamp first so subtraction cannot wrap or overflow on an invalid input.
+    if (mv <= kDdsBattEmptyMv) return 0;
+    if (mv >= kDdsBattFullMv) return 100;
+    const int32_t pct = (int32_t(mv) - kDdsBattEmptyMv) * 100 /
+                        (kDdsBattFullMv - kDdsBattEmptyMv);
+    return constrain(pct, 0, 100);
+}
+
+// ---------------------------------------------------------------- JSON HELPERS
+// Append cached values to the status response. Non-finite numbers become null.
+// These helpers format data only; they do not run a check or contact the DCM.
+void WebFlag(String& json, const char* key, bool value){
+    json += ",\""; json += key; json += "\":"; json += value ? "true" : "false";
+}
+void WebNumber(String& json, const char* key, double value, unsigned int digits){
+    json += ",\""; json += key; json += "\":";
+    json += isfinite(value) ? String(value, digits) : String("null");
+}
+void WebVector(String& json, const char* key, const float values[3]){
+    json += ",\""; json += key; json += "\":[";
+    for (int i = 0; i < 3; ++i) { if (i) json += ','; json += isfinite(values[i]) ? String(values[i], 3) : String("null"); }
+    json += ']';
+}
+// ---------------------------------------------------------------- STATUS REQUEST
+// Snapshot the existing FSM, lever inputs and indicators for the browser.
+// State names come directly from the automation; the website does not invent them.
+void CockpitStatus(){
+    // Reserve once for this response to reduce String reallocations.
+    String json; json.reserve(2400);
+    json = "{\"state\":\""; json += StateName(state); json += "\"";
+    WebFlag(json, "dcmPresent", LimitClosed); WebFlag(json, "servoUp", servoUp); WebFlag(json, "radioUp", radioUp);
+    // Heltec battery stays on its own LiPo profile.
+    WebNumber(json, "ddsBatteryPct", WebBatteryPercent(ddsBatteryMv), 0);
+    WebNumber(json, "ddsBatteryMv", ddsBatteryMv, 0); WebNumber(json, "stateAgeMs", millis() - TimeStateEntered, 0);
+    WebNumber(json, "missCounter", missCounter, 0);
+    WebNumber(json, "lockSettleMs", kLockSettleMs, 0);
+    // Send the firmware timer settings; the browser uses them for the countdown.
+    json += ",\"limits\":{\"armDelayMs\":"; json += String(kArmDelayMs);
+    WebNumber(json, "noPacketMs", kNoPacketMs, 0); WebNumber(json, "maxMissed", kMaxMissed, 0);
+    WebNumber(json, "softwareErrorMs", kSoftwareErrorMs, 0); json += '}';
+    // Raw operator inputs and firmware indicators are separate from FSM state.
+    json += ",\"inputs\":{\"UnlockCommand\":"; json += UnlockCommand ? "true" : "false";
+    WebFlag(json, "ArmCommand", ArmCommand); WebFlag(json, "DeployCommand", DeployCommand); json += '}';
+    json += ",\"indicators\":{\"ArmedStatus\":"; json += ArmedStatus ? "true" : "false";
+    WebFlag(json, "ErrorStatus", ErrorStatus); WebFlag(json, "DeployStatus", DeployStatus); WebFlag(json, "DeployFailStatus", DeployFailStatus);
+    WebFlag(json, "LockFailStatus", LockFailStatus); json += '}';
+    // Last received packet only. A status request does not wake or poll the DCM.
+    json += ",\"telemetry\":{\"hasTelemetry\":"; json += webHasTelemetry ? "true" : "false";
+    WebNumber(json, "ageMs", millis() - tLastPacket, 0); WebNumber(json, "lastTelemetrySeq", lastSeq, 0);
+    WebFlag(json, "dcmPmuOk", dcmPmuOk); WebFlag(json, "dcmGnssOk", dcmGnssOk);
+    WebFlag(json, "dcmImuOk", dcmImuOk); WebFlag(json, "dcmMagOk", dcmMagOk); WebFlag(json, "dcmBmeOk", dcmBmeOk);
+    WebNumber(json, "dcmLatDeg", dcmLatDeg, 7); WebNumber(json, "dcmLonDeg", dcmLonDeg, 7);
+    WebNumber(json, "dcmGpsAltM", dcmGpsAltM, 1); WebNumber(json, "dcmHdop", dcmHdop, 2);
+    // Keep raw millivolts available in telemetry; only the display percent is estimated.
+    WebNumber(json, "dcmBattMv", dcmBattMv, 0);
+    WebNumber(json, "dcmBattPct", webHasTelemetry && dcmPmuOk ? dcmBattPct : -1, 0);
+    WebNumber(json, "dcmTempC", dcmTempC, 1);
+    WebNumber(json, "dcmHumidityPct", dcmHumidityPct, 1); WebNumber(json, "dcmPressurePa", dcmPressurePa, 1);
+    WebVector(json, "dcmAccelMps2", dcmAccelMps2); WebVector(json, "dcmGyroDps", dcmGyroDps); WebVector(json, "dcmMagGauss", dcmMagGauss);
+    WebNumber(json, "lastRssi", lastRssi, 1); WebNumber(json, "lastSnr", lastSnr, 1); json += "}}";
+    cockpitServer.sendHeader("Cache-Control", "no-store"); cockpitServer.send(200, "application/json", json);
+}
+// ---------------------------------------------------------------- OPERATOR INPUT
+// Set the existing command variables. The FSM decides the resulting action.
+// No servo positions, arming rules or state transitions are implemented here.
+void CockpitCommand(){
+    const String command = cockpitServer.arg("command"), value = cockpitServer.arg("value");
+    bool* input = command == "UNLOCK" ? &UnlockCommand : command == "ARM" ? &ArmCommand : command == "DEPLOY" ? &DeployCommand : nullptr;
+    if (input && (value == "true" || value == "false")) *input = value == "true";
+    else if (command == "CHECK_BATTERY") {
+        // Sleeping DCM: request its existing battery-only reply.
+        // Active operation: use normal incoming telemetry rather than interrupt it.
+        const bool request = state == STANDBY || state == UNLOCK;
+        if (request) CheckBatteryCommand = true; // her FSM consumes and transmits this request
+        cockpitServer.send(202, "application/json", request ? "{\"ok\":true,\"requested\":true}" : "{\"ok\":true,\"requested\":false}"); return;
+    }
+    else if (command == "END") EndCommand = true; // existing Deployed() handles it
+    else if (command == "ACK") AckCommand = true; // existing DeployFailure() handles it
+    else { cockpitServer.send(400, "application/json", "{\"ok\":false,\"message\":\"Unknown command or missing ON/OFF value.\"}"); return; }
+    cockpitServer.send(202, "application/json", "{\"ok\":true}");
+}
+// Reply first, then let ServiceCockpit restart after the response interval.
+void CockpitReset(){
+    if (cockpitServer.arg("confirmed") != "true") { cockpitServer.send(400, "application/json", "{\"ok\":false}"); return; }
+    cockpitServer.send(202, "application/json", "{\"ok\":true}");
+    tWebResetRequested = millis(); webResetPending = true;
+}
+// ---------------------------------------------------------------- WEB STARTUP
+// Host our own Wi-Fi and serve the compiled HTML/CSS/JS stored in web_assets.h.
+void StartCockpitServer(){
+    WiFi.mode(WIFI_AP);
+    if (!WiFi.softAP(kDdsWifiSsid, kDdsWifiPassword)) { Serial.println("DDS Wi-Fi failed to start."); return; }
+    cockpitServer.on("/", HTTP_GET, [](){ cockpitServer.sendHeader("Cache-Control", "no-store"); cockpitServer.send_P(200, "text/html; charset=utf-8", WEB_MAIN_HTML); });
+    cockpitServer.on("/main.html", HTTP_GET, [](){ cockpitServer.sendHeader("Cache-Control", "no-store"); cockpitServer.send_P(200, "text/html; charset=utf-8", WEB_MAIN_HTML); });
+    cockpitServer.on("/cockpit_style.css", HTTP_GET, [](){ cockpitServer.sendHeader("Cache-Control", "no-store"); cockpitServer.send_P(200, "text/css; charset=utf-8", WEB_COCKPIT_CSS); });
+    cockpitServer.on("/interface_logic.js", HTTP_GET, [](){ cockpitServer.sendHeader("Cache-Control", "no-store"); cockpitServer.send_P(200, "application/javascript; charset=utf-8", WEB_INTERFACE_JS); });
+    cockpitServer.on("/api/status", HTTP_GET, CockpitStatus);
+    cockpitServer.on("/api/command", HTTP_POST, CockpitCommand);
+    cockpitServer.on("/api/reset", HTTP_POST, CockpitReset);
+    cockpitServer.enableDelay(false); cockpitServer.begin(); webServerUp = true;
+    Serial.print("DDS Wi-Fi: "); Serial.println(kDdsWifiSsid);
+    Serial.print("Cockpit address: http://"); Serial.println(WiFi.softAPIP());
+}
+// ---------------------------------------------------------------- LOOP SERVICE
+// Observe the packet timestamp already set by ReadPacket(); never read it again.
+// Timer checks do not wait, but the regular WebServer still has socket waits.
+void ServiceCockpit(){
+    if (tLastPacket != 0) webHasTelemetry = true; 
+    if (webResetPending) { if (millis() - tWebResetRequested >= 750) ESP.restart(); return; }
+    // Regular WebServer still has synchronous socket waits. Defer it during the timed jiggle.
+    if (webServerUp && state != DEPLOY_ERROR) cockpitServer.handleClient();
+}
+// ------------------------ END WEB VARIABLE BRIDGE ------------------------
+
 void setup() {
     PowerOn();
     Serial.begin(115200);
     radioUp = RadioBegin();
     servoUp = ServoBegin();
+    StartCockpitServer(); // web adapter startup
 }
 
 void loop() {
@@ -651,4 +790,5 @@ void loop() {
         case DEPLOYED:       Deployed();      break;
         case DEPLOY_FAILURE: DeployFailure(); break;
     }
+    ServiceCockpit(); // web adapter; FSM has already run this pass
 }
