@@ -665,13 +665,38 @@ void RememberWebGps(){
 // ---------------------------------------------------------------- DDS BATTERY DISPLAY
 // Convert the automation's existing voltage to a percentage for the webpage.
 // Same linear convention as the DCM: 3200 mV = 0%, 4200 mV = 100%.
-// No additional samples, smoothing, ADC reads or changes to the automation.
+// Uses the existing voltage only; no extra ADC reads or changes to the automation.
 int WebDdsBatteryPercent(uint32_t mv){
     constexpr uint32_t kEmptyMv = 3200, kFullMv = 4200;
     if (mv == 0) return -1;
     if (mv <= kEmptyMv) return 0;
     if (mv >= kFullMv) return 100;
     return (mv - kEmptyMv) * 100 / (kFullMv - kEmptyMv);
+}
+
+// Update only after five consecutive percentage readings agree.
+// Sample the automation's cached voltage once per 100 ms, not every loop pass.
+// A candidate and count represent the last five matching readings without an array.
+constexpr uint32_t kWebDdsBatterySampleMs = 100;
+constexpr uint8_t kWebDdsBatteryMatches = 5;
+uint32_t tWebDdsBatterySample = 0;
+int webDdsBatteryDisplayPct = -1, webDdsBatteryCandidatePct = -1;
+uint8_t webDdsBatteryMatchCount = 0;
+
+void ServiceWebDdsBattery(){
+    const uint32_t now = millis();
+    if (now - tWebDdsBatterySample < kWebDdsBatterySampleMs) return;
+    tWebDdsBatterySample = now; // never repeat stale samples to catch up after a busy loop
+    const int pct = WebDdsBatteryPercent(ddsBatteryMv);
+    if (pct != webDdsBatteryCandidatePct) {
+        webDdsBatteryCandidatePct = pct;
+        webDdsBatteryMatchCount = 1;
+    } else if (webDdsBatteryMatchCount < kWebDdsBatteryMatches) {
+        ++webDdsBatteryMatchCount;
+    }
+    if (webDdsBatteryMatchCount == kWebDdsBatteryMatches) {
+        webDdsBatteryDisplayPct = pct;
+    }
 }
 
 // ---------------------------------------------------------------- JSON HELPERS
@@ -697,7 +722,7 @@ void CockpitStatus(){
     String json; json.reserve(2400);
     json = "{\"state\":\""; json += StateName(state); json += "\"";
     WebFlag(json, "dcmPresent", LimitClosed); WebFlag(json, "servoUp", servoUp); WebFlag(json, "radioUp", radioUp);
-    WebNumber(json, "ddsBatteryPct", WebDdsBatteryPercent(ddsBatteryMv), 0);
+    WebNumber(json, "ddsBatteryPct", webDdsBatteryDisplayPct, 0);
     WebNumber(json, "ddsBatteryMv", ddsBatteryMv, 0); WebNumber(json, "stateAgeMs", millis() - TimeStateEntered, 0);
     WebNumber(json, "missCounter", missCounter, 0);
     WebNumber(json, "lockSettleMs", kLockSettleMs, 0);
@@ -781,6 +806,7 @@ void StartCockpitServer(){
 void ServiceCockpit(){
     if (tLastPacket != 0) webHasTelemetry = true; 
     RememberWebGps(); // cached values only; no extra radio or sensor reads
+    ServiceWebDdsBattery(); // display-only five-matching-reading confirmation
     if (webResetPending) { if (millis() - tWebResetRequested >= 750) ESP.restart(); return; }
     // Regular WebServer still has synchronous socket waits. Defer it during the timed jiggle.
     if (webServerUp && state != DEPLOY_ERROR) cockpitServer.handleClient();
