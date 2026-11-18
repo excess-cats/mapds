@@ -36,9 +36,9 @@
  *   LOCKING ------(settled, out of range or no reply)> UNLOCK   [Unlock back on, LockFailStatus]
  *   STANDBY ------(Arm on, limit CLOSED, radio + servo up)> ARMED  [send WAKE, start 15 s timer]
  *   ARMED --------(Arm off)---------> STANDBY          [send SLEEP]
- *   ARMED --------(software fault)--> SOFTWARE_ERROR   [send RESTART, start 1 min timer]
+ *   ARMED --------(software fault)--> SOFTWARE_ERROR   [send RESTART, start 5 s timer]
  *   ARMED --------(Deploy on, 15 s up)> DEPLOYING      [start 10 s timer]
- *   SOFTWARE_ERROR (1 min up)-------> STANDBY          [send SLEEP] (STANDBY re-arms if Arm is on and limit CLOSED)
+ *   SOFTWARE_ERROR (5 s up)-------> STANDBY          [send SLEEP] (STANDBY re-arms if Arm is on and limit CLOSED)
  *   SOFTWARE_ERROR (Arm off)--------> STANDBY          [send SLEEP]
  *   DEPLOYING ----(limit OPEN)------> DEPLOYED
  *   DEPLOYING ----(10 s, still CLOSED)> DEPLOY_ERROR   [jiggle the servo 3 times]
@@ -91,7 +91,7 @@
  *
  * ---------------------------------------------------------------- OPEN ISSUES
  *   - Command collisions: the DCM is deaf for ~0.74 s of every ~1.74 s cycle while it transmits
- *     (83 B at SF12/BW500, then a 1 s gap), so a SLEEP or RESTART can be lost. Options: send
+ *     (83 B at SF12/BW500, then a 1 s gap), so a RESTART can be lost (SLEEP repeats for 1 s). Options: send
  *     right after a received frame (~1 s of open air); send copies ~0.8 s apart; or resend
  *     SLEEP while frames keep arriving in a "should be asleep" state.
  *
@@ -152,8 +152,8 @@ constexpr int RADIO_BUSY = 13;
 constexpr int RADIO_DIO1 = 14;
 
 constexpr int LIMIT_PIN  = 40;   // drone presence limit switch
-constexpr int SERVO_TX   = 38;   // Heltec TX -> DRI0057 RX
-constexpr int SERVO_RX   = 39;   // Heltec RX <- DRI0057 TX
+constexpr int SERVO_TX   = 39;   // Heltec TX -> DRI0057 RX
+constexpr int SERVO_RX   = 38;   // Heltec RX <- DRI0057 TX
 
 // BOARD SETTINGS
 
@@ -189,7 +189,8 @@ constexpr uint32_t kArmDelayMs      = 15000;   // ARMED: no faults or Deploy unt
 constexpr uint32_t kNoPacketMs       = 10000;   // ARMED: no telemetry for this long = fault
 constexpr uint32_t kMissWindowMs     = 10000;   // ARMED: missCounter restarts every window
 constexpr int      kMaxMissed        = 3;       // ARMED: more than this many misses in one window = fault
-constexpr uint32_t kSoftwareErrorMs  = 60000;   // SOFTWARE_ERROR: wait this long, then STANDBY
+constexpr uint32_t kSoftwareErrorMs  = 5000;   // SOFTWARE_ERROR: wait this long, then STANDBY
+constexpr uint32_t kSleepRepeatMs    = 1000;    // SLEEP: resend back to back for this long
 constexpr uint32_t kDeployTimeoutMs  = 10000;   // DEPLOYING: limit still CLOSED after this = DEPLOY_ERROR
 constexpr uint32_t kStatusPeriodMs   = 1000;    // bench: status line on the serial monitor
 
@@ -416,7 +417,7 @@ void Armed(){
 }
 
 void SoftwareError(){
-    // exits: Arm off -> STANDBY, 1 min up -> STANDBY
+    // exits: Arm off -> STANDBY, 5 s up -> STANDBY
     ErrorStatus = true;
     if (!ArmCommand || millis() - TimeStateEntered >= kSoftwareErrorMs){
         ErrorStatus = false;
@@ -486,7 +487,7 @@ void PowerOn(){
 }
 
 uint32_t ReadBatteryMv(){
-    return analogReadMilliVolts(VBAT_PIN) * 49 / 10;   // undo the 390k/100k divider (x4.9)
+    return analogReadMilliVolts(VBAT_PIN) * 49 / 10 / 50 * 50;   // undo the 390k/100k divider (x4.9), to 50 mV
 }
 
 /** Sets dcmBattPct from dcmBattMv: a straight line from kDcmBattEmptyMv (0 %) to kDcmBattFullMv (100 %). */
@@ -538,7 +539,11 @@ bool ServoBegin(){
 bool Transmit(Command cmd){
     if (!radioUp) { return false; }
     mapds::Header message = mapds::buildHeader(static_cast<uint8_t>(cmd), cmdSeq++);
-    int16_t radio_status = radio.transmit(reinterpret_cast<uint8_t*>(&message), sizeof(message));
+       uint32_t tStart = millis();
+    int16_t radio_status;
+    do {   // SLEEP repeats back to back so one copy lands outside the DCM's deaf TX window
+        radio_status = radio.transmit(reinterpret_cast<uint8_t*>(&message), sizeof(message));
+    } while (cmd == Command::SLEEP && millis() - tStart < kSleepRepeatMs);
     radio.startReceive();   // transmit() leaves the radio idle (and raises DIO1); listen again for telemetry
     if (radio_status != RADIOLIB_ERR_NONE) {
         Serial.printf("TX failed (%d)\n", radio_status);
@@ -581,7 +586,7 @@ int32_t ReadPacket(){
     dcmGpsAltM     = f.gpsAltM;
     dcmHdop        = f.hdop;
     dcmPressurePa  = f.pressurePa;
-    dcmBattMv      = f.battMv;
+    dcmBattMv      = f.battMv  / 50 * 50;
     dcmTempC       = f.tempC;
     dcmHumidityPct = f.humidityPct;
     for (int i = 0; i < 3; i++) {
@@ -657,67 +662,16 @@ void RememberWebGps(){
 }
 
 
-// ---------------------------------------------------------------- BATTERY DISPLAY
-// DDS is the Heltec's single-cell 3.7 V LiPo. Its existing voltage reader
-// belongs to the automation; the bridge never reads the ADC a second time.
-// DDS percentage: the same straight-line calculation used by UpdateDcmBattPct().
-// 3200 mV -> 0%, 4200 mV -> 100%; values outside that span are clamped.
-int WebBatteryPercent(uint32_t mv){
-    constexpr uint16_t kDdsBattEmptyMv = 3200;
-    constexpr uint16_t kDdsBattFullMv = 4200;
-    if (mv == 0) return -1; // no voltage reading: display unavailable
-    // Clamp first so subtraction cannot wrap or overflow on an invalid input.
-    if (mv <= kDdsBattEmptyMv) return 0;
-    if (mv >= kDdsBattFullMv) return 100;
-    const int32_t pct = (int32_t(mv) - kDdsBattEmptyMv) * 100 /
-                        (kDdsBattFullMv - kDdsBattEmptyMv);
-    return constrain(pct, 0, 100);
-}
-
-// Display filtering only. Five voltage samples reject short spikes; a changed
-// percentage must hold for three seconds before replacing the displayed value.
-// Fixed storage, no extra ADC reads, and no waiting for the next sample.
-constexpr uint32_t kWebBatterySampleMs = 200;
-constexpr uint32_t kWebBatteryConfirmMs = 3000;
-uint32_t webBatterySamples[5] = {};
-uint8_t webBatterySampleCount = 0, webBatterySampleIndex = 0;
-uint32_t tWebBatterySample = 0, tWebBatteryCandidate = 0;
-int webBatteryDisplayPct = -1, webBatteryCandidatePct = -1;
-bool webBatteryReady = false;
-
-void ServiceWebBattery(){
-    const uint32_t now = millis();
-    if (now - tWebBatterySample < kWebBatterySampleMs) return;
-    tWebBatterySample = now; // one sample per service; never catch up in a loop
-    webBatterySamples[webBatterySampleIndex] = ddsBatteryMv;
-    webBatterySampleIndex = (webBatterySampleIndex + 1) % 5;
-    if (webBatterySampleCount < 5) ++webBatterySampleCount;
-    if (webBatterySampleCount < 5) return; // collect the first second before displaying
-
-    // Sort a local copy. The middle reading ignores up to two isolated outliers.
-    uint32_t sorted[5];
-    for (int i = 0; i < 5; ++i) sorted[i] = webBatterySamples[i];
-    for (int i = 1; i < 5; ++i) {
-        for (int j = i; j > 0 && sorted[j] < sorted[j - 1]; --j) {
-            const uint32_t value = sorted[j];
-            sorted[j] = sorted[j - 1];
-            sorted[j - 1] = value;
-        }
-    }
-    const int pct = WebBatteryPercent(sorted[2]);
-    if (!webBatteryReady) {
-        webBatteryDisplayPct = webBatteryCandidatePct = pct;
-        tWebBatteryCandidate = now;
-        webBatteryReady = true; // first result needs no additional confirmation
-        return;
-    }
-    if (pct != webBatteryCandidatePct) {
-        webBatteryCandidatePct = pct;
-        tWebBatteryCandidate = now; // a different candidate restarts confirmation
-    }
-    if (pct != webBatteryDisplayPct && now - tWebBatteryCandidate >= kWebBatteryConfirmMs) {
-        webBatteryDisplayPct = pct;
-    }
+// ---------------------------------------------------------------- DDS BATTERY DISPLAY
+// Convert the automation's existing voltage to a percentage for the webpage.
+// Same linear convention as the DCM: 3200 mV = 0%, 4200 mV = 100%.
+// No additional samples, smoothing, ADC reads or changes to the automation.
+int WebDdsBatteryPercent(uint32_t mv){
+    constexpr uint32_t kEmptyMv = 3200, kFullMv = 4200;
+    if (mv == 0) return -1;
+    if (mv <= kEmptyMv) return 0;
+    if (mv >= kFullMv) return 100;
+    return (mv - kEmptyMv) * 100 / (kFullMv - kEmptyMv);
 }
 
 // ---------------------------------------------------------------- JSON HELPERS
@@ -743,8 +697,7 @@ void CockpitStatus(){
     String json; json.reserve(2400);
     json = "{\"state\":\""; json += StateName(state); json += "\"";
     WebFlag(json, "dcmPresent", LimitClosed); WebFlag(json, "servoUp", servoUp); WebFlag(json, "radioUp", radioUp);
-    // Heltec battery stays on its own LiPo profile.
-    WebNumber(json, "ddsBatteryPct", webBatteryDisplayPct, 0);
+    WebNumber(json, "ddsBatteryPct", WebDdsBatteryPercent(ddsBatteryMv), 0);
     WebNumber(json, "ddsBatteryMv", ddsBatteryMv, 0); WebNumber(json, "stateAgeMs", millis() - TimeStateEntered, 0);
     WebNumber(json, "missCounter", missCounter, 0);
     WebNumber(json, "lockSettleMs", kLockSettleMs, 0);
@@ -828,7 +781,6 @@ void StartCockpitServer(){
 void ServiceCockpit(){
     if (tLastPacket != 0) webHasTelemetry = true; 
     RememberWebGps(); // cached values only; no extra radio or sensor reads
-    ServiceWebBattery(); // stabilize the display; raw battery voltage stays unchanged
     if (webResetPending) { if (millis() - tWebResetRequested >= 750) ESP.restart(); return; }
     // Regular WebServer still has synchronous socket waits. Defer it during the timed jiggle.
     if (webServerUp && state != DEPLOY_ERROR) cockpitServer.handleClient();

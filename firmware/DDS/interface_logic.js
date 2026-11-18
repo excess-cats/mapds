@@ -118,6 +118,38 @@ function renderTelemetry(t){
  $('#packetNumberValue').textContent=connected()&&battery?.hasTelemetry===true&&Number.isFinite(battery.lastTelemetrySeq)?String(battery.lastTelemetrySeq):'NOT AVAILABLE';
  $('#packetNumberValue').title='Sequence number reported by the Drone Communication Module; it may restart or wrap. This is not a total received-packet count.';
 }
+// GUI-only lever prerequisites. Blocked buttons remain clickable for an explanation;
+// no request is sent, and the visual lever still follows the firmware snapshot.
+function leverBlockReason(command,requestedValue){
+ if(!connected())return {title:'Control unavailable: DDS disconnected',detail:'No current Drone Deployment System status is available. The lever has not been changed.'};
+ const current=snapshot.inputs?.[INPUTS[command]];
+ if(typeof current!=='boolean')return {title:'Control unavailable: input status missing',detail:'The firmware has not supplied the current '+command+' input value. The lever has not been changed.'};
+ const next=typeof requestedValue==='boolean'?requestedValue:!current;
+ if(pendingRefresh)return {title:'Control unavailable: battery refresh pending',detail:'Waiting for the current battery refresh reply before sending another operator input.'};
+ if(pendingInput)return {title:'Control unavailable: input confirmation pending',detail:'Waiting for the firmware to confirm the '+pendingInput.command+' request before sending another input.'};
+ if(commandBusy)return {title:'Control unavailable: request in progress',detail:'The previous operator request is still being sent. No additional request was queued.'};
+ const state=snapshot.state, present=snapshot.dcmPresent;
+ const presence=present===true?'Presence detected':present===false?'Presence not detected':'Presence status unavailable';
+ if(command==='ARM'&&next){
+  const servo=snapshot.servoUp,radio=snapshot.radioUp,unlock=snapshot.inputs.UnlockCommand;
+  const missing=[];
+  if(present!==true)missing.push(present===false?'presence not detected':'presence status unavailable');
+  if(servo!==true)missing.push(servo===false?'servo initialization failed':'servo status unavailable');
+  if(radio!==true)missing.push(radio===false?'radio initialization failed':'radio status unavailable');
+  if(state!=='STANDBY')missing.push('system is '+state.replaceAll('_',' '));
+  if(unlock!==false)missing.push(unlock===true?'unlock is selected':'lock input status unavailable');
+  if(missing.length)return {title:'Cannot arm: '+missing.join('; '),detail:presence+'; '+(servo===true?'servo initialization passed':servo===false?'servo initialization failed':'servo status unavailable')+'; '+(radio===true?'radio initialization passed':radio===false?'radio initialization failed':'radio status unavailable')+'; system state '+state.replaceAll('_',' ')+'; '+(unlock===false?'lock selected':unlock===true?'unlock selected':'lock input status unavailable')+'. No ARM request was sent.'};
+ }
+ // Turning ARM off stays available even if a prerequisite has since failed.
+ if(command==='UNLOCK'){
+  const action=next?'unlock':'lock';
+  if(!next&&present!==true)return {title:'Cannot lock: '+(present===false?'presence not detected':'presence status unavailable'),detail:presence+'. The presence switch must detect attachment before Lock can be selected. The lever remains unlocked; no lock request was queued.'};
+  const required=next?'STANDBY':'UNLOCK';
+  if(state!==required)return {title:'Cannot '+action+': system is '+state.replaceAll('_',' '),detail:'Selecting '+action+' requires '+required+'. The firmware currently reports '+state.replaceAll('_',' ')+'. No request was sent.'};
+ }
+ return null;
+}
+
 function render(){
  const online=connected(),state=online?snapshot.state:'OFFLINE';setDisplayedState(state);
  document.querySelectorAll('[data-state-name]').forEach(node=>{if(state==='ARMED'&&snapshot.indicators?.ArmedStatus!==true)node.textContent='ARMING';});
@@ -131,7 +163,13 @@ function render(){
   const value=online&&typeof snapshot.inputs?.[key]==='boolean'?snapshot.inputs[key]:null;
   const button=$('#'+BUTTONS[command]);if(command!=='DEPLOY')button.setAttribute('aria-checked',String(value===true));
   else {button.dataset.state=state;button.disabled=false;}
-  button.disabled=value===null||commandBusy||Boolean(pendingInput)||Boolean(pendingRefresh)||(command==='DEPLOY'&&value===true);
+  if(command==='DEPLOY')button.disabled=value===null||commandBusy||Boolean(pendingInput)||Boolean(pendingRefresh)||value===true;
+  else {
+   const blocked=leverBlockReason(command);
+   button.disabled=false; // native disabled buttons cannot report why a click is blocked
+   button.setAttribute('aria-disabled',String(Boolean(blocked)));
+   button.title=blocked?blocked.detail:'';
+  }
   button.setAttribute('aria-busy',String(pendingInput?.command===command));
   const id=command==='UNLOCK'?'lockText':command==='ARM'?'armText':'deployText';
   $('#'+id).textContent=command==='ARM'?(value===true?'ARMED':'DISARMED'):command==='DEPLOY'?'DEPLOY':value===null?'NOT AVAILABLE':state==='LOCKING'?'LOCKING':state==='UNLOCK'?'UNLOCKED':'LOCKED';
@@ -220,6 +258,10 @@ async function postCommand(command,value){
  try{const response=await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(body).toString(),signal:controller.signal});const result=await response.json();return {...result,ok:response.ok&&result.ok===true};}finally{clearTimeout(timer);}
 }
 async function toggleInput(command,requestedValue){
+ if(command==='UNLOCK'||command==='ARM'){
+  const blocked=leverBlockReason(command,requestedValue);
+  if(blocked){addMessage('warning',blocked.title,blocked.detail);return;}
+ }
  if(!connected()||commandBusy||pendingInput||pendingRefresh)return;
  const current=snapshot.inputs?.[INPUTS[command]];if(typeof current!=='boolean')return;
  const target=typeof requestedValue==='boolean'?requestedValue:!current;
