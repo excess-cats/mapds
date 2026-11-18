@@ -38,7 +38,7 @@
  *   ARMED --------(Arm off)---------> STANDBY          [send SLEEP]
  *   ARMED --------(software fault)--> SOFTWARE_ERROR   [send RESTART, start 5 s timer]
  *   ARMED --------(Deploy on, 15 s up)> DEPLOYING      [start 10 s timer]
- *   SOFTWARE_ERROR (5 s up)-------> STANDBY          [send SLEEP] (STANDBY re-arms if Arm is on and limit CLOSED)
+ *   SOFTWARE_ERROR (5 s up)---------> STANDBY          [send SLEEP] (STANDBY re-arms if Arm is on and limit CLOSED)
  *   SOFTWARE_ERROR (Arm off)--------> STANDBY          [send SLEEP]
  *   DEPLOYING ----(limit OPEN)------> DEPLOYED
  *   DEPLOYING ----(10 s, still CLOSED)> DEPLOY_ERROR   [jiggle the servo 3 times]
@@ -539,7 +539,7 @@ bool ServoBegin(){
 bool Transmit(Command cmd){
     if (!radioUp) { return false; }
     mapds::Header message = mapds::buildHeader(static_cast<uint8_t>(cmd), cmdSeq++);
-       uint32_t tStart = millis();
+    uint32_t tStart = millis();
     int16_t radio_status;
     do {   // SLEEP repeats back to back so one copy lands outside the DCM's deaf TX window
         radio_status = radio.transmit(reinterpret_cast<uint8_t*>(&message), sizeof(message));
