@@ -36,9 +36,9 @@
  *   LOCKING ------(settled, out of range or no reply)> UNLOCK   [Unlock back on, LockFailStatus]
  *   STANDBY ------(Arm on, limit CLOSED, radio + servo up)> ARMED  [send WAKE, start 15 s timer]
  *   ARMED --------(Arm off)---------> STANDBY          [send SLEEP]
- *   ARMED --------(software fault)--> SOFTWARE_ERROR   [send RESTART, start 1 min timer]
+ *   ARMED --------(software fault)--> SOFTWARE_ERROR   [send RESTART, start 5 s timer]
  *   ARMED --------(Deploy on, 15 s up)> DEPLOYING      [start 10 s timer]
- *   SOFTWARE_ERROR (1 min up)-------> STANDBY          [send SLEEP] (STANDBY re-arms if Arm is on and limit CLOSED)
+ *   SOFTWARE_ERROR (5 s up)---------> STANDBY          [send SLEEP] (STANDBY re-arms if Arm is on and limit CLOSED)
  *   SOFTWARE_ERROR (Arm off)--------> STANDBY          [send SLEEP]
  *   DEPLOYING ----(limit OPEN)------> DEPLOYED
  *   DEPLOYING ----(10 s, still CLOSED)> DEPLOY_ERROR   [jiggle the servo 3 times]
@@ -91,7 +91,7 @@
  *
  * ---------------------------------------------------------------- OPEN ISSUES
  *   - Command collisions: the DCM is deaf for ~0.74 s of every ~1.74 s cycle while it transmits
- *     (83 B at SF12/BW500, then a 1 s gap), so a SLEEP or RESTART can be lost. Options: send
+ *     (83 B at SF12/BW500, then a 1 s gap), so a RESTART can be lost (SLEEP repeats for 1 s). Options: send
  *     right after a received frame (~1 s of open air); send copies ~0.8 s apart; or resend
  *     SLEEP while frames keep arriving in a "should be asleep" state.
  *
@@ -189,7 +189,8 @@ constexpr uint32_t kArmDelayMs      = 15000;   // ARMED: no faults or Deploy unt
 constexpr uint32_t kNoPacketMs       = 10000;   // ARMED: no telemetry for this long = fault
 constexpr uint32_t kMissWindowMs     = 10000;   // ARMED: missCounter restarts every window
 constexpr int      kMaxMissed        = 3;       // ARMED: more than this many misses in one window = fault
-constexpr uint32_t kSoftwareErrorMs  = 60000;   // SOFTWARE_ERROR: wait this long, then STANDBY
+constexpr uint32_t kSoftwareErrorMs  = 5000;    // SOFTWARE_ERROR: wait this long, then STANDBY
+constexpr uint32_t kSleepRepeatMs    = 1000;    // SLEEP: resend back to back for this long
 constexpr uint32_t kDeployTimeoutMs  = 10000;   // DEPLOYING: limit still CLOSED after this = DEPLOY_ERROR
 constexpr uint32_t kStatusPeriodMs   = 1000;    // bench: status line on the serial monitor
 
@@ -416,7 +417,7 @@ void Armed(){
 }
 
 void SoftwareError(){
-    // exits: Arm off -> STANDBY, 1 min up -> STANDBY
+    // exits: Arm off -> STANDBY, 5 s up -> STANDBY
     ErrorStatus = true;
     if (!ArmCommand || millis() - TimeStateEntered >= kSoftwareErrorMs){
         ErrorStatus = false;
@@ -486,7 +487,7 @@ void PowerOn(){
 }
 
 uint32_t ReadBatteryMv(){
-    return analogReadMilliVolts(VBAT_PIN) * 49 / 10;   // undo the 390k/100k divider (x4.9)
+    return analogReadMilliVolts(VBAT_PIN) * 49 / 10 / 50 * 50;   // undo the 390k/100k divider (x4.9), to 50 mV
 }
 
 /** Sets dcmBattPct from dcmBattMv: a straight line from kDcmBattEmptyMv (0 %) to kDcmBattFullMv (100 %). */
@@ -538,7 +539,11 @@ bool ServoBegin(){
 bool Transmit(Command cmd){
     if (!radioUp) { return false; }
     mapds::Header message = mapds::buildHeader(static_cast<uint8_t>(cmd), cmdSeq++);
-    int16_t radio_status = radio.transmit(reinterpret_cast<uint8_t*>(&message), sizeof(message));
+    uint32_t tStart = millis();
+    int16_t radio_status;
+    do {   // SLEEP repeats back to back so one copy lands outside the DCM's deaf TX window
+        radio_status = radio.transmit(reinterpret_cast<uint8_t*>(&message), sizeof(message));
+    } while (cmd == Command::SLEEP && millis() - tStart < kSleepRepeatMs);
     radio.startReceive();   // transmit() leaves the radio idle (and raises DIO1); listen again for telemetry
     if (radio_status != RADIOLIB_ERR_NONE) {
         Serial.printf("TX failed (%d)\n", radio_status);
@@ -581,7 +586,7 @@ int32_t ReadPacket(){
     dcmGpsAltM     = f.gpsAltM;
     dcmHdop        = f.hdop;
     dcmPressurePa  = f.pressurePa;
-    dcmBattMv      = f.battMv;
+    dcmBattMv      = f.battMv / 50 * 50;
     dcmTempC       = f.tempC;
     dcmHumidityPct = f.humidityPct;
     for (int i = 0; i < 3; i++) {
