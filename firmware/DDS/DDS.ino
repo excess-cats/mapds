@@ -218,7 +218,6 @@ State state = STANDBY;
 uint32_t TimeStateEntered;
 SX1262 radio = new Module(RADIO_CS, RADIO_DIO1, RADIO_RST, RADIO_BUSY);
 SMS_STS servo;               // servo object
-bool servoUp = false;        // ServoBegin() got a reply; if false, never arm (no way to release)
 bool     limitRaw      = false;   // last raw switch reading, before debounce
 uint32_t tLimitChanged = 0;       // millis() when limitRaw last changed
 bool radioUp = false;        // RadioBegin() succeeded; if false, never arm (no telemetry possible)
@@ -378,7 +377,7 @@ void Standby(){
 
     if (UnlockCommand) StateChange(UNLOCK);
 
-    else if (ArmCommand && LimitClosed && radioUp && servoUp) StateChange(ARMED);   // no radio = no telemetry, no servo = no release: never arm
+    else if (ArmCommand && LimitClosed && radioUp) StateChange(ARMED);   // no radio = no telemetry: never arm
 
 }
 
@@ -523,16 +522,11 @@ bool RadioBegin(){
     return true;
 }
 
-bool ServoBegin(){
+void ServoBegin(){
     Serial1.begin(kServoBaud, SERIAL_8N1, SERVO_RX, SERVO_TX);
     servo.pSerial = &Serial1;
-    int pingResult = servo.Ping(kServoId);
-    if (pingResult == -1) {
-        Serial.printf("Servo %d not answering (check 12 V, wiring, UART mode)\n", kServoId);
-        return false;
-    }
-    Serial.printf("Servo %d OK\n", kServoId);
-    return true;
+    if (servo.Ping(kServoId) == -1) Serial.printf("Servo %d not answering (check 12 V, wiring, UART mode)\n", kServoId);
+    else Serial.printf("Servo %d OK\n", kServoId);
 }
 
 /** Sends a command to the DCM (as a bare Header, next cmdSeq), then goes back to listening. Returns false if it didn't go out. */
@@ -721,7 +715,7 @@ void CockpitStatus(){
     // Reserve once for this response to reduce String reallocations.
     String json; json.reserve(2400);
     json = "{\"state\":\""; json += StateName(state); json += "\"";
-    WebFlag(json, "dcmPresent", LimitClosed); WebFlag(json, "servoUp", servoUp); WebFlag(json, "radioUp", radioUp);
+    WebFlag(json, "dcmPresent", LimitClosed); WebFlag(json, "radioUp", radioUp);
     WebNumber(json, "ddsBatteryPct", webDdsBatteryDisplayPct, 0);
     WebNumber(json, "ddsBatteryMv", ddsBatteryMv, 0); WebNumber(json, "stateAgeMs", millis() - TimeStateEntered, 0);
     WebNumber(json, "missCounter", missCounter, 0);
@@ -817,7 +811,7 @@ void setup() {
     PowerOn();
     Serial.begin(115200);
     radioUp = RadioBegin();
-    servoUp = ServoBegin();
+    ServoBegin();
     StartCockpitServer(); // web adapter startup
 }
 
