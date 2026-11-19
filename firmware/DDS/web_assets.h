@@ -432,14 +432,13 @@ function leverBlockReason(command,requestedValue){
  const state=snapshot.state, present=snapshot.dcmPresent;
  const presence=present===true?'Presence detected':present===false?'Presence not detected':'Presence status unavailable';
  if(command==='ARM'&&next){
-  const servo=snapshot.servoUp,radio=snapshot.radioUp,unlock=snapshot.inputs.UnlockCommand;
+  const radio=snapshot.radioUp,unlock=snapshot.inputs.UnlockCommand;
   const missing=[];
   if(present!==true)missing.push(present===false?'presence not detected':'presence status unavailable');
-  if(servo!==true)missing.push(servo===false?'servo initialization failed':'servo status unavailable');
   if(radio!==true)missing.push(radio===false?'radio initialization failed':'radio status unavailable');
   if(state!=='STANDBY')missing.push('system is '+state.replaceAll('_',' '));
   if(unlock!==false)missing.push(unlock===true?'unlock is selected':'lock input status unavailable');
-  if(missing.length)return {title:'Cannot arm: '+missing.join('; '),detail:presence+'; '+(servo===true?'servo initialization passed':servo===false?'servo initialization failed':'servo status unavailable')+'; '+(radio===true?'radio initialization passed':radio===false?'radio initialization failed':'radio status unavailable')+'; system state '+state.replaceAll('_',' ')+'; '+(unlock===false?'lock selected':unlock===true?'unlock selected':'lock input status unavailable')+'. No ARM request was sent.'};
+  if(missing.length)return {title:'Cannot arm: '+missing.join('; '),detail:presence+'; '+(radio===true?'radio initialization passed':radio===false?'radio initialization failed':'radio status unavailable')+'; system state '+state.replaceAll('_',' ')+'; '+(unlock===false?'lock selected':unlock===true?'unlock selected':'lock input status unavailable')+'. No ARM request was sent.'};
  }
  // Turning ARM off stays available even if a prerequisite has since failed.
  if(command==='UNLOCK'){
